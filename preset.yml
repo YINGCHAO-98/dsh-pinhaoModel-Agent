@@ -1,0 +1,3 @@
+name: 拼好模
+description: DeepSeek 默认直办；单一能力只调用一个专长模型，跨能力交付才启动多模型 Harness。
+order: 5

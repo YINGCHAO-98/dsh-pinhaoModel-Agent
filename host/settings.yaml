@@ -1,0 +1,29 @@
+llm-pi-ai:
+  providers:
+    {
+      doubao:
+        {
+          displayName: doubao,
+          apiKeyEnv: DOUBAO_API_KEY,
+          api: openai-completions,
+          baseURL: https://ark.cn-beijing.volces.com/api/plan/v3,
+          models:
+            [
+              { id: deepseek-v4-1-flash, name: deepseek-v4-1-flash, input: [ text, image ] },
+              { id: kimi-k2.7-code, name: kimi-k2.7-code },
+              { id: minimax-m3, name: minimax-m3, input: [ text, image ] },
+              {
+                  id: doubao-seed-2-0-lite-260215,
+                  name: doubao-seed-2-0-lite-260215,
+                  input: [ text, image ]
+                },
+              { id: glm-5-3-flash, name: glm-5-3-flash, input: [ text, image ] },
+              { id: kimi-k2-8-preview, name: kimi-k2-8-preview }
+            ]
+        }
+    }
+agent-default-model:
+  provider: doubao
+  model: deepseek-v4-1-flash
+agent-presets:
+  default: pin-hao-mo

@@ -1,0 +1,23 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dshmarket": "1.45.1",
+    "dsh-agy-link": "0.4.36",
+    "dsh-context": "0.53.4",
+    "dsh-cost-meter": "1.7.30"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dshmarket",
+        "dsh-agy-link",
+        "dsh-context",
+        "dsh-cost-meter"
+      ],
+      "patchReload": "live"
+    }
+  }
+}
