@@ -1,0 +1,14 @@
+{
+  "name": "pinhaomo-delivery-controller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:sandbox": "node --test tests/sandbox.integration.mjs",
+    "test:dsh": "node --test tests/dsh.integration.mjs",
+    "test:dsh-e2e": "node --test tests/dsh-e2e.integration.mjs",
+    "demo": "node demo.mjs"
+  }
+}

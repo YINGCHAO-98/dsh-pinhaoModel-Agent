@@ -9,3 +9,9 @@ credentials*
 sessions/
 cache/
 *.log
+
+# Local controller state and generated artifacts
+.dsh-delivery/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

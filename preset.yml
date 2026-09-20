@@ -1,3 +1,3 @@
 name: 拼好模
-description: DeepSeek 默认直办；单一能力只调用一个专长模型，跨能力交付才启动多模型 Harness。
+description: 固定实现—验证—修复控制器；用户命令启动，快照验收、两轮修复、持久状态与运行记录。
 order: 5
