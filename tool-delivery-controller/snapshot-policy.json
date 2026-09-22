@@ -1,0 +1,5 @@
+{
+  "maxBytes": 268435456,
+  "maxFiles": 10000,
+  "excludedNames": [".git", "node_modules", ".delivery", ".DS_Store", ".npm-cache", ".npm", ".pnpm-store", ".yarn-cache", "__pycache__", ".pytest_cache", ".venv"]
+}

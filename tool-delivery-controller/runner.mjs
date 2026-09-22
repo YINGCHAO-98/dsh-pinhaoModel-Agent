@@ -6,13 +6,14 @@ import { randomUUID } from 'node:crypto';
 import { materialize, hash } from './files.mjs';
 
 // Never pass commands through a shell or inherit model/provider credentials.
-export function execute(argv, { cwd, signal, timeoutMs, env = {} }) {
+export function execute(argv, { cwd, signal, timeoutMs, env = {}, input, processGroup = true }) {
   signal?.throwIfAborted();
   return new Promise(resolveResult => {
     const child = spawn(argv[0], argv.slice(1), {
-      cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
+      cwd, detached: processGroup && process.platform !== 'win32', stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8', ...env },
     });
+    if (child.stdin) { child.stdin.on('error', () => {}); child.stdin.end(input); }
     let stdout = '', stderr = '', timedOut = false, spawnError, truncated = false;
     const collect = which => chunk => {
       const value = chunk.toString();
@@ -23,7 +24,7 @@ export function execute(argv, { cwd, signal, timeoutMs, env = {} }) {
     child.stderr.on('data', collect('stderr'));
     const stop = () => {
       if (!child.pid) return;
-      try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL'); } catch {}
+      try { process.kill(!processGroup || process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL'); } catch {}
     };
     const onAbort = () => stop();
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -42,22 +43,26 @@ export function execute(argv, { cwd, signal, timeoutMs, env = {} }) {
 }
 
 const quote = value => JSON.stringify(value);
-export function seatbeltProfile(snapshot, scratch, executable) {
+export function seatbeltProfile(snapshot, scratch, executable, { writable = false, extraReadRoots = [] } = {}) {
   const readRoots = ['/System', '/usr', '/bin', '/sbin', '/Library/Apple', '/private/var/db/dyld',
-    '/private/etc', snapshot, scratch, dirname(dirname(executable))];
+    '/private/etc', snapshot, scratch, dirname(dirname(executable)), ...extraReadRoots];
   return [
     '(version 1)', '(allow default)', '(deny network*)', '(deny file-read*)', '(deny file-write*)',
     '(allow file-read-metadata)', '(allow file-read-data (literal "/"))',
     `(allow file-read* ${readRoots.map(path => `(subpath ${quote(path)})`).join(' ')})`,
     '(allow file-read* (subpath "/dev"))',
     `(allow file-write* (subpath ${quote(scratch)}) (literal "/dev/null"))`,
+    ...(writable ? [`(allow file-write* (subpath ${quote(snapshot)}))`] : []),
   ].join('\n');
 }
 
 export class SandboxRunner {
-  constructor({ backend = process.platform === 'darwin' ? 'seatbelt' : 'docker', image = 'node:24-bookworm-slim', nodeExecutable = process.execPath } = {}) {
+  constructor({ backend = process.platform === 'darwin' ? 'seatbelt' : 'docker', image = 'node:24-bookworm-slim', nodeExecutable = process.execPath, extraReadRoots = [] } = {}) {
     if (!['seatbelt', 'docker'].includes(backend)) throw new Error('Unknown sandbox backend');
     if (!isAbsolute(nodeExecutable)) throw new Error('nodeExecutable must be an absolute path');
+    if (!Array.isArray(extraReadRoots) || extraReadRoots.some(path => typeof path !== 'string' || !isAbsolute(path)))
+      throw new Error('extraReadRoots must contain absolute paths');
+    this.extraReadRoots = [...extraReadRoots];
     this.nodeExecutable = nodeExecutable;
     this.backend = backend;
     this.image = image;
@@ -85,7 +90,7 @@ export class SandboxRunner {
       let argv, env;
       if (this.backend === 'seatbelt') {
         const executable = await realpath(check.argv[0] === 'node' ? this.nodeExecutable : check.argv[0]);
-        argv = ['/usr/bin/sandbox-exec', '-p', seatbeltProfile(source, scratch, executable), executable, ...check.argv.slice(1)];
+        argv = ['/usr/bin/sandbox-exec', '-p', seatbeltProfile(source, scratch, executable, { extraReadRoots: this.extraReadRoots }), executable, ...check.argv.slice(1)];
         env = { HOME: scratch, TMPDIR: scratch, PATH: `${dirname(executable)}:/usr/bin:/bin` };
       } else {
         argv = ['docker', 'run', '--rm', '--name', container, '--network=none', '--read-only', '--cap-drop=ALL',

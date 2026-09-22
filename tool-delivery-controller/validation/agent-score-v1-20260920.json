@@ -1,0 +1,288 @@
+{
+  "rubric": "AGENTS.md#agent-评分制度v1",
+  "rubricVersion": 1,
+  "scoredAt": "2026-09-20T09:35:34.799450+00:00",
+  "scope": "Current on-disk preset and implementation; running Desktop reload not verified.",
+  "gitHead": "57ad56653d26015cd7c7a91c5a7e30a14a71a899",
+  "hasUncommittedChanges": true,
+  "snapshot": {
+    "algorithm": "SHA256 over sorted compact JSON of relative path -> SHA256(file bytes); includes behavioral config, code, tests, skills; excludes runtime secrets/state and score documents",
+    "fingerprint": "9941b20bcf9352c02f24a068d8c2c2ee5ee85227a2fac8a84699b79ea6daa3b2",
+    "files": {
+      "agent.cordis.yml": "92b52acdad0415710606f501d35575e62834579200eba992ea567288d6f971e7",
+      "delivery-contract.json": "6e9fd7e2ac65d9cd91c0f13bf04fb5bd4bce74e0892b4fd118802f1f7d82f799",
+      "preset.yml": "4656fcf69a7182b20019b7f1c1ac1b130b220890679f0bf81e585f9c9f0d1e99",
+      "skills/ark-media-generation/SKILL.md": "7e44ce4594d43ed45f0400638d7b61cb5680eb0e371e252072b6271114ff5cb0",
+      "skills/deepseek-code-execution/SKILL.md": "b9b0bb9f28fc7156ead4bbac16c2bce9ab31dc1fefcf2b6b8c9be1c09a3cf073",
+      "skills/doubao-media-analysis/SKILL.md": "149606c33bc17d2c147fed6eb676a890caf980b7481170020f15c6cf12379e9d",
+      "skills/glm-visual-analysis/SKILL.md": "e39f0a4d100f32aa1132286e98ad7a6f6a7c07fc04479e41d82c2807a5f0964f",
+      "skills/kimi-code-quality-gate/SKILL.md": "fd1a104be9a4c584699d38e1091c3108c95a084808b3b105fd37dad6f1014086",
+      "skills/kimi-long-context-research/SKILL.md": "d260cb74bef5ce81a1817c3888b1d28a28304eed6950417c63475bbf293bf166",
+      "skills/minimax-creative-content/SKILL.md": "9b4bada2ab8ccee37819f80851cc7d7b0e94c5fbaa1a0c912f4b51544a36eb2b",
+      "skills/multimodel-orchestration/SKILL.md": "a603a4b00634f8f3d16034059ff86a1351da317ecdf54f82767dcfd908c30bec",
+      "skills/software-delivery-harness/SKILL.md": "ad57e30cb16ecb12f6979efc2789698fc39cd5bddff03e86188d59a9c395360a",
+      "skills/software-delivery-harness/references/lifecycle.md": "00616b17930d838a44d1e6a30e0865850dd5099035c0962ff03e64645ac1746b",
+      "skills/software-delivery-harness/references/workflow-contracts.md": "29388be0ef25908ec66b0456f62fb7c15b8a087a45eba3616552c90a126593f2",
+      "tool-delivery-controller/capabilities.mjs": "8c325d2ffd5cb02d2784587897176f1d693c669c7d2486fd7a98aedbc38ef54b",
+      "tool-delivery-controller/controller.mjs": "2bdb046f0499d14c9f46052a02d936145632279411fe5b29309d6f6167356ee6",
+      "tool-delivery-controller/demo.mjs": "68def1cd30e333d07da2f18d7ee0a1ba36a68ff99e456cddad0dc92ea6a0e3f8",
+      "tool-delivery-controller/explore.mjs": "f514101946e699e067e350fa75ed4c942dee78cd41a7b616b2fdc46d956639bc",
+      "tool-delivery-controller/files.mjs": "63d84cd13181c2dff124ffb5e82eacd9340154ab87ddd47871105ae4b7fd1cc0",
+      "tool-delivery-controller/index.mjs": "ccf9c8e9edc78868069fe86186049888014b5471ec5e4007b7336f25bc0abbb9",
+      "tool-delivery-controller/native-tools.mjs": "b6e03ed2a3b6ecdab93e5edc44894dfbe3f1e60a748e5a7feb48c048b0d788dc",
+      "tool-delivery-controller/package.json": "fb20cde8d515ca10a795102c0836663a4569824d3e344dfcee2b231204a68a03",
+      "tool-delivery-controller/runner.mjs": "ac4f09baf4fd95490278618b2e7e9d5a0430c8b9f16a162f36703c15e0c0e80e",
+      "tool-delivery-controller/specialists.mjs": "188eb0c7229f853494dfe29742692e1fb948fdfa4eb0e539b114fcae1b912ffd",
+      "tool-delivery-controller/store.mjs": "582544eee0ec32b479c373e0c64e11ed3d012e928e22675382a3842f67e140e5",
+      "tool-delivery-controller/tests/controller.test.mjs": "5b87b64f79c71b0036b27921c6ff9eb2698104a0dc1e552ec4909684884c6aa5",
+      "tool-delivery-controller/tests/crash-child.mjs": "51f03bba646b877c388c8e08443c0b29de6f613a1edd9c09b18efc03d57f8911",
+      "tool-delivery-controller/tests/dsh-e2e.integration.mjs": "ba6e195b9b7550298818517958d60567a79b1b566bba1af8e7fd981c12f387d1",
+      "tool-delivery-controller/tests/dsh.integration.mjs": "3307c7c56ef9afa4d733543ddeccb80f4227f672a0c88c9f2bdc9d53043a8c2b",
+      "tool-delivery-controller/tests/explore.test.mjs": "39032b2a904516688abddc378653206584068643c5fed36510d78378efdd70f3",
+      "tool-delivery-controller/tests/live-e2e.mjs": "2242e1e1aac94d7d647fd96c001efcff49dcf2fb4c7139e4431dc365845e98b1",
+      "tool-delivery-controller/tests/live-multimodel-fixture.mjs": "f0e1713e4088943df4b6eb44c1212ee172d88acc4deb5c3b499a8d201d0ce190",
+      "tool-delivery-controller/tests/sandbox.integration.mjs": "16f3da54ba57e74fe5fd3ef83743fb645132e357dc4453f911bce68d1d36944a",
+      "tool-delivery-controller/tests/specialists.test.mjs": "cde7aaff9451eb7ccdf1f7cad1eddf1ef58d0e896769deae20511eec16a608d7",
+      "tool-delivery-controller/tests/tool-policy.test.mjs": "f054fcd38a1875056d4081dbc08f5845ad4e2f9f75e854c76f677016e3974296",
+      "tool-delivery-controller/tests/worker-sandbox.integration.mjs": "1055fd5f74d1b569e9bbc44cc5744ee35cfdcfe006829244ef4282e59a7173c2",
+      "tool-delivery-controller/tests/workspace.test.mjs": "4e0045e5cba0d654411f210b4b4231bc096fb60d0308a6e197dc84ffc8fd1c4a",
+      "tool-delivery-controller/tool-policy.mjs": "2d706fc3c2f3d14104691d7a6e40a5a425bff1f983bbe59c12c91fa14490c5c3",
+      "tool-delivery-controller/validation/agent-score-v1-20260920-probe.mjs": "382032da3d3ac943590e20c208c0840a85c885e7f2fedc031654eea363682bea",
+      "tool-delivery-controller/worker-helper.mjs": "91021a3e6968f5423a152aed3770a888b1ea8641a56c1513a486c401cca3523f",
+      "tool-delivery-controller/workspace.mjs": "1c4e217a8b4bde3e8f8d4de5a942c92e1f323b138c9ebd88ef9af6665cde26b1"
+    }
+  },
+  "rubricSha256": "189fb3eac5676303e6c794b998e081cd70d8ba977653316e31161ebae8dbe27c",
+  "score": 45,
+  "maxScore": 100,
+  "P": 9,
+  "F": 1,
+  "U": 10,
+  "evidenceCoverage": 0.5,
+  "maturity": "prototype / insufficient outcome evidence; acceptance blocker reproduced with fixture",
+  "currentValidation": [
+    {
+      "command": "DSH_SOURCE=/Users/chowchow/Desktop/codeing/deepseek/deepseek-harness node --test tool-delivery-controller/tests/*.test.mjs tool-delivery-controller/tests/dsh.integration.mjs",
+      "passed": 40,
+      "failed": 0,
+      "exitCode": 0
+    },
+    {
+      "command": "DSH_SOURCE=/Users/chowchow/Desktop/codeing/deepseek/deepseek-harness node --test tool-delivery-controller/tests/dsh-e2e.integration.mjs tool-delivery-controller/tests/sandbox.integration.mjs tool-delivery-controller/tests/worker-sandbox.integration.mjs",
+      "passed": 9,
+      "failed": 0,
+      "exitCode": 0,
+      "environment": "Authorized execution outside outer sandbox for nested Seatbelt; temporary workspaces only"
+    }
+  ],
+  "paidModelCallsThisEvaluation": 0,
+  "historicalEvidence": [
+    "tool-delivery-controller/validation/capabilities-20260920.json",
+    "tool-delivery-controller/VALIDATION.md"
+  ],
+  "criteria": [
+    {
+      "id": "D1",
+      "status": "P",
+      "points": 5,
+      "reason": "当前49项机制回归通过；包含真实执行器/DSH和fixture模型，未作为真实模型效果统计。",
+      "evidence": [
+        "tool-delivery-controller/tests/dsh-e2e.integration.mjs",
+        "tool-delivery-controller/tests/controller.test.mjs"
+      ]
+    },
+    {
+      "id": "D2",
+      "status": "U",
+      "points": 0,
+      "reason": "无当前版本10个不同简单bug的冻结真实任务集。",
+      "evidence": []
+    },
+    {
+      "id": "D3",
+      "status": "U",
+      "points": 0,
+      "reason": "无当前版本5个不同跨文件缺陷的冻结真实任务集。",
+      "evidence": []
+    },
+    {
+      "id": "D4",
+      "status": "U",
+      "points": 0,
+      "reason": "当前代码有固定测试和合同，但没有真实固定集的逐需求独立验收证据。",
+      "evidence": [
+        "tool-delivery-controller/../delivery-contract.json"
+      ]
+    },
+    {
+      "id": "D5",
+      "status": "U",
+      "points": 0,
+      "reason": "没有至少20个不同真实任务的独立复核样本；不能估计误报通过率。",
+      "evidence": []
+    },
+    {
+      "id": "D6",
+      "status": "U",
+      "points": 0,
+      "reason": "没有同版本10个不同bug各3次运行的稳定性记录。",
+      "evidence": []
+    },
+    {
+      "id": "C1",
+      "status": "P",
+      "points": 5,
+      "reason": "当前角色权限、身份隔离、保护路径及负向测试通过。",
+      "evidence": [
+        "tool-delivery-controller/tests/tool-policy.test.mjs",
+        "tool-delivery-controller/tests/workspace.test.mjs",
+        "tool-delivery-controller/tests/dsh.integration.mjs"
+      ]
+    },
+    {
+      "id": "C2",
+      "status": "P",
+      "points": 5,
+      "reason": "本轮macOS真实Seatbelt读写/网络隔离、超时和取消检查通过；范围不含Docker与任意敌对代码。",
+      "evidence": [
+        "tool-delivery-controller/tests/sandbox.integration.mjs",
+        "tool-delivery-controller/tests/worker-sandbox.integration.mjs"
+      ]
+    },
+    {
+      "id": "C3",
+      "status": "P",
+      "points": 5,
+      "reason": "不能跳过固定验收，拒绝过期快照、篡改报告、缺少实际工具证据；不证明自然语言语义完全正确。",
+      "evidence": [
+        "tool-delivery-controller/tests/controller.test.mjs",
+        "tool-delivery-controller/tests/specialists.test.mjs"
+      ]
+    },
+    {
+      "id": "C4",
+      "status": "P",
+      "points": 5,
+      "reason": "程序限制调用/修复/并发与递归；取消、中断、持久预算及恢复测试通过。辅助任务自动续跑尚未实现，本项不授予该能力。",
+      "evidence": [
+        "tool-delivery-controller/tests/controller.test.mjs",
+        "tool-delivery-controller/tests/specialists.test.mjs"
+      ]
+    },
+    {
+      "id": "R1",
+      "status": "P",
+      "points": 5,
+      "reason": "当前端到端fixture确认简单bug直达执行且不申请额外能力；固定独立审查仍执行。",
+      "evidence": [
+        "tool-delivery-controller/tests/dsh-e2e.integration.mjs"
+      ]
+    },
+    {
+      "id": "R2",
+      "status": "P",
+      "points": 5,
+      "reason": "实现Worker协助、跨轮报告交接、引用所有权/完整性和失败阻断测试通过；兼容入口共用预算。",
+      "evidence": [
+        "tool-delivery-controller/tests/specialists.test.mjs",
+        "tool-delivery-controller/tests/dsh-e2e.integration.mjs",
+        "tool-delivery-controller/tests/controller.test.mjs"
+      ]
+    },
+    {
+      "id": "R3",
+      "status": "U",
+      "points": 0,
+      "reason": "未建立预标注真实盲测集；显式要求MiniMax的历史用例不能证明自主路由准确。",
+      "evidence": []
+    },
+    {
+      "id": "E1",
+      "status": "P",
+      "points": 5,
+      "reason": "当前运行器保留起止时间、各Agent时间、逐消息usage、工具trace和修复数；历史实测展示这些原始字段可采集，仅对可观测机制计分。",
+      "evidence": [
+        "tool-delivery-controller/tests/live-e2e.mjs",
+        "tool-delivery-controller/validation/capabilities-20260920.json",
+        "tool-delivery-controller/capabilities.mjs",
+        "tool-delivery-controller/index.mjs"
+      ]
+    },
+    {
+      "id": "E2",
+      "status": "U",
+      "points": 0,
+      "reason": "没有当前版本同一冻结集的分位数。历史单例230.367秒/29响应是调查信号，不当作当前固定集失败。",
+      "evidence": [
+        "tool-delivery-controller/validation/capabilities-20260920.json"
+      ]
+    },
+    {
+      "id": "E3",
+      "status": "U",
+      "points": 0,
+      "reason": "没有至少10个同任务的受控A/B，也没有附加审查的独立增益与费用预算证据。",
+      "evidence": []
+    },
+    {
+      "id": "O1",
+      "status": "P",
+      "points": 5,
+      "reason": "任务/合同/模型/快照/工具证据/报告与交接事件可追溯；记录持久化和重开测试通过。",
+      "evidence": [
+        "tool-delivery-controller/capabilities.mjs",
+        "tool-delivery-controller/store.mjs",
+        "tool-delivery-controller/tests/specialists.test.mjs"
+      ]
+    },
+    {
+      "id": "O2",
+      "status": "U",
+      "points": 0,
+      "reason": "本次保存代码指纹不等于已有完整固定集评估；缺案例版本和全量真实结果。",
+      "evidence": []
+    },
+    {
+      "id": "U1",
+      "status": "U",
+      "points": 0,
+      "reason": "未见声明范围内3个独立项目的真实交付记录，当前真实样例主要是同一加法缺陷。",
+      "evidence": []
+    },
+    {
+      "id": "U2",
+      "status": "F",
+      "points": 0,
+      "reason": "负向探针复现：引用不支持的clip.mp4，仅有读取无关notes.txt的执行记录，控制器仍接受passed。已有能力枚举拒绝不足以保障支持输入的边界。",
+      "evidence": [
+        "tool-delivery-controller/capabilities.mjs",
+        "tool-delivery-controller/validation/agent-score-v1-20260920-probe.mjs"
+      ]
+    }
+  ],
+  "nextPriority": "Fix unsupported native media input admission and required-source read binding, add regression; then freeze 10 distinct real bug cases and evaluate D2/E2 followed by E3.",
+  "negativeProbes": [
+    {
+      "id": "unsupported-native-media-and-unrelated-source",
+      "expected": "reject or blocked",
+      "actual": "passed",
+      "structuralAccepted": true,
+      "fixture": true,
+      "paidModelCalls": 0,
+      "productionIncidentClaim": false,
+      "command": "node tool-delivery-controller/validation/agent-score-v1-20260920-probe.mjs",
+      "exitCode": 1,
+      "knownFailure": true
+    }
+  ],
+  "environment": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "node": "v24.21.0",
+    "dshRuntime": "/Applications/DSH Desktop.app/Contents/Resources/app/package.json",
+    "dshTestSource": "/Users/chowchow/Desktop/codeing/deepseek/deepseek-harness"
+  },
+  "superseded": {
+    "by": "tool-delivery-controller/EVALUATION.md (v2)",
+    "reason": "用户未认可 v1 评分权重、阈值和成熟度判断；撤回总分评价，保留历史机制证据与缺陷记录。"
+  }
+}

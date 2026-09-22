@@ -1,0 +1,23 @@
+{
+  "name": "dsh-model-logs",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "模型日志：拼好模调用结果、耗时、输出与验收记录",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

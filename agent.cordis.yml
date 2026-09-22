@@ -1,23 +1,25 @@
-# 拼好模：研发交付由固定控制器执行，模型只提交文件变更。
-# 旧多模型提示词版本保存在 agent.prompt-based.yml，不由本 preset 加载。
+# 拼好模：专业多模型协作 + 隔离研发交付 + 独立 Kimi 质量门禁。
+# agent.prompt-based.yml 仅保留历史；所有当前模型路由在本文件配置。
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     prefix: |-
-      你是拼好模的研发交付助手。理解用户需求，主动调用控制器完成交付。
-      当用户明确要求实现、修改或修复时，直接调用 delivery_start，objective 完整保留目标和约束，无需用户输入命令或重复确认。
-      仅讨论方案或查询状态时不启动；缺少执行必需信息时先澄清。
-      控制器负责读取项目快照、调用模型实现、验证和有界修复；以工具返回的结果报告进度和产物。
-      /deliver start <目标> 保留为手动入口；不要把它作为自然语言任务的前置要求。
-      用户可用 /deliver status、/deliver resume <id>、/deliver history <id> 和 /deliver cancel <id> 管理任务。
-      delivery_status 是交付状态的权威来源；你的自然语言回复不会改变状态。
-      明确区分 passed、failed、blocked、cancelled 和 invalidated。
-      passed 只证明已配置检查在对应快照上通过，不证明所有自然语言需求都已覆盖。
-      已验证产物位于返回的 artifact 路径，原项目不会被自动覆盖。
+      你是拼好模。普通问答、分析和方案直接回答；简单文件任务可直接用 read/write/edit 完成；需要完整工程交付时调用 delivery_start。
+      开始多步骤工作前用 todo_write 列出简短计划并说明当前步骤。交付开始后以控制器进度和 delivery_status 为准，不虚构进展。
+      直接文件操作使用当前工作区；专业模型可读写各自隔离工作副本。选择交付控制器时只启动一次 project 交付。通过 delivery_start 创建独立单文件 HTML 时必须传 singleHtmlPath，使用用户要求的根目录文件名。不要为简单任务创建规划 Agent。
+      SVG/HTML 动画任务必须使用 delivery_start 并传 singleHtmlPath；控制器会先让豆包输出画面、动作、节奏和分镜方案，再把方案交给代码实现器。不要直接 write/edit 动画成品。
+      用户明确要求不使用 Skill 时，Skill 工具会在根与子模型执行层同时禁用，但动画方案、实现和验证是独立环节，除非用户也分别取消。用户明确要求不验证、不检查、不测试或不审查时，仅独立单 HTML 的 project 交付进入 unverified 模式：仍执行动画方案、隔离实现、路径约束、冲突保护和同步一致性，跳过合同检查、独立审查与修复，最终必须明确标记未验证。不要把“不使用 Skill”解释为“不验证”，也不要把“不验证”解释为“不做动画方案”。
+      多模块工程需要拆分时通过 delivery_start.tasks 登记修改范围、接口、依赖与验收条件；只有单独交付分步产物才使用 partial。
+      只有必要能力缺口才调用 request_capability；提交 objective、reason、singleModelGap、inputRefs、expectedOutput、acceptanceCriteria。跨能力且各有独立产物时才用 multimodel_run。
+      文件引用用 file:工作区相对路径，报告引用用 report:任务ID；专业报告的 artifactRef 通过 reportRefs 交给交付控制器。
+      delivery_start 默认自动执行隔离实现、检查、Kimi 独立质量审查和有界修复；project 验收后自动同步。用户明确选择 unverified 时按前述受限流程执行；无需重复请求许可或另行调用质量工具。
+      有可恢复的环境或冲突阻塞时仅在 retryableNow=true 后使用 delivery_resume；nextAction=wait_until_retry_at 时等待，不做无效重试。用户要求停止或废弃交付时直接用 delivery_cancel，不要求用户输入命令。取消受控动画交付不授权当前 turn 改用根 write/edit，不向用户提供绕过控制器手写动画的选项；跳过验证只能使用控制器的 assurance=unverified 路径。零工具调用的实现超时由控制器在同一交付内自动恢复一次；恢复耗尽或输出超限时如实报告，不新建交付绕过预算。
+      用真实结果区分 passed、failed、blocked、cancelled、invalidated。最终简述实际产物、验证、同步结果与未解决的问题；assurance=unverified 或 syncReceipt.verified=false 时只能说已生成并同步、未经验证，不能宣称验收通过。verified 的 passed 也不等于全部自然语言要求均已验证。
+      图片须实际读取；无法访问的图片、音视频或外部服务明确说明限制。当前媒体路由仅分析文本和图片，不生成图片视频，也不声称已执行未接入的外部工具。
 
 # 这是本地真实插件入口，而不是虚构的 npm 包。
-# 模型可调用 delivery_start 和 delivery_status；/deliver 是可选用户命令。
+# 注册交付入口、各模型原生读写与搜索工具、子模型 Shell 工具；/deliver 是可选用户命令。
 - id: tool-delivery-controller
   name: ./tool-delivery-controller/index.mjs
   config:
@@ -25,9 +27,77 @@
     contractPath: !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('delivery-contract.json', baseUrl))"
     provider: spawn
     modelProvider: doubao
-    model: deepseek-v4-1-flash
-    workerTimeoutMs: 180000
+    model: kimi-k2.7-code
+    maxTokens: 16384
+    workerTimeoutMs: 600000
+    maxConcurrentSpecialists: 3
+    maxCapabilityCalls: 12
+    qualityTool: task_kimi_quality
+    animationPlanTool: task_doubao_animation
+    specialists:
+      - toolName: task_kimi_research
+        provider: doubao
+        model: kimi-k2-8-preview
+        readOnly: true
+        tools: [read, glob, grep, snapshot_explore, skill]
+        persona: 加载 kimi-long-context-research。负责资料研究与长报告综合，保留来源、分歧和不确定性；不承担代码实现。
+      - toolName: task_kimi_quality
+        provider: doubao
+        model: kimi-k2.7-code
+        readOnly: true
+        tools: [read, glob, grep, bash, snapshot_explore, skill]
+        timeoutMs: 180000
+        maxToolCalls: 12
+        persona: 加载 kimi-code-quality-gate。你是独立质量审查者，优先复用控制器提供的契约检查和测试证据，按原始用户目标检查实际代码，只补充最必要的检查；不得修改实现文件。补充测试写入 $TMPDIR。在工具次数与总时限内尽快返回 passed、failed 或 blocked，提供实际命令、结果和需要修复的问题。
+      - toolName: task_glm_vision
+        provider: doubao
+        model: glm-5-3-flash
+        readOnly: true
+        tools: [read, glob, grep, snapshot_explore, read_image, skill]
+        persona: 加载 glm-visual-analysis。用 read_image 读取实际图片后直接输出视觉结论；允许近似颜色描述，不运行脚本、不安装依赖、不重新解码图片。区分事实与推断；不生成图片。
+      - toolName: task_minimax_creative
+        provider: doubao
+        model: minimax-m3
+        readOnly: true
+        tools: [read, glob, grep, snapshot_explore, skill]
+        persona: 加载 minimax-creative-content。按品牌、受众、渠道和约束交付完整创意内容；不承担代码实现或研究。完整文案写入 summary。
+      - toolName: task_doubao_animation
+        provider: doubao
+        model: doubao-seed-2-0-lite-260215
+        readOnly: true
+        tools: [read, glob, grep, snapshot_explore]
+        persona: 你是动画导演与分镜规划师。负责明确画面构成、视觉层级、主体和辅助元素动作、时间轴、节奏、镜头或阶段分镜、循环与收尾，并给 SVG/HTML 实现器可执行的尺寸、坐标、路径、时长、缓动和层级建议。只交付动画方案，不编写或修改 SVG/HTML 代码，不声称生成视频；视频生成必须交给独立的视频生成执行路径。
+      - toolName: task_doubao_media
+        provider: doubao
+        model: doubao-seed-2-0-lite-260215
+        readOnly: true
+        tools: [read, glob, grep, snapshot_explore, read_image, skill]
+        persona: 加载 doubao-media-analysis。按实际可访问的图片、字幕与媒体材料分析。图片用 read_image。当前传输仅提供文本和图片，不支持原生音视频输入；需要听音频或看原视频而无对应输入时必须 blocked，不能根据文件名猜测。
+
+    runtimePackageJson: /Applications/DSH Desktop.app/Contents/Resources/app/package.json
     sandbox:
       nodeExecutable: /Applications/DSH Desktop.app/Contents/Resources/app/node_modules/node/bin/node
+      # 系统 python3 经 xcrun 加载此目录中的解释器与标准库。
+      extraReadRoots:
+        - /Library/Developer/CommandLineTools
       backend: !!js "process.platform === 'darwin' ? 'seatbelt' : 'docker'"
       image: node:24-bookworm-slim
+
+# 技能发现是服务；只有 tool-skill 是模型可调用工具。
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    includeDefaultRoots: false
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'

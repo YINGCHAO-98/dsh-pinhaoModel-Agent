@@ -1,0 +1,66 @@
+{
+  "run": "b78bcb26-0923-4f74-9a97-cc13303ac652",
+  "status": "passed",
+  "startedAt": "2026-09-20T08:39:16.644Z",
+  "finishedAt": "2026-09-20T08:41:05.074Z",
+  "durationSeconds": 108.43,
+  "stats": [
+    {
+      "id": "live-1789893556761",
+      "parent": null,
+      "provider": "doubao",
+      "model": "deepseek-v4-1-flash",
+      "requests": 4,
+      "inputTokens": 9616,
+      "outputTokens": 1425,
+      "responseIds": [
+        "021789893557464e78865964099cb4ca259751f97dcc861ccaac7",
+        "021789893561571e78865964099cb4ca259751f97dcc861d3dde8",
+        "021789893657175e78865964099cb4ca259751f97dcc861ae6594",
+        "021789893659646e78865964099cb4ca259751f97dcc861c7ad95"
+      ]
+    },
+    {
+      "id": "c20e77a5-c2fc-4e06-9763-66ebba950fbf",
+      "parent": "live-1789893556761",
+      "provider": "doubao",
+      "model": "deepseek-v4-1-flash",
+      "requests": 7,
+      "inputTokens": 5313,
+      "outputTokens": 2133,
+      "responseIds": [
+        "021789893567817e78865964099cb4ca259751f97dcc861a3cde6",
+        "021789893570393e78865964099cb4ca259751f97dcc861c97501",
+        "021789893572491e78865964099cb4ca259751f97dcc861b31a6c",
+        "021789893575814e78865964099cb4ca259751f97dcc8615f0a02",
+        "021789893579627e78865964099cb4ca259751f97dcc861a8f668",
+        "021789893583501e78865964099cb4ca259751f97dcc861bfa460",
+        "021789893587400e78865964099cb4ca259751f97dcc861c15521"
+      ]
+    },
+    {
+      "id": "4be83ae7-c5cf-47e4-88db-a6fdb8f76413",
+      "parent": "live-1789893556761",
+      "provider": "doubao",
+      "model": "kimi-k2.7-code",
+      "requests": 7,
+      "inputTokens": 6282,
+      "outputTokens": 2143,
+      "responseIds": [
+        "021789893595334e78865964099cb4ca259751f97dcc8617f3249",
+        "021789893597929e78865964099cb4ca259751f97dcc861334560",
+        "021789893606288e78865964099cb4ca259751f97dcc861865aee",
+        "021789893609422e78865964099cb4ca259751f97dcc861a5859e",
+        "021789893621253e78865964099cb4ca259751f97dcc86165a4f1",
+        "021789893628416e78865964099cb4ca259751f97dcc8614f894a",
+        "021789893632963e78865964099cb4ca259751f97dcc861d0c135"
+      ]
+    }
+  ],
+  "toolErrors": [],
+  "testsUnchanged": true,
+  "artifactCode": "module.exports = (a, b) => a + b;\n",
+  "snapshot": "a14a3f3cf1621038aaa6b91ed6413f7062d7d80d342fbfd61b9d9df6d8415df6",
+  "reportPath": "/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-Uu9wie/report.json",
+  "artifact": "/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-Uu9wie/state/artifacts/b78bcb26-0923-4f74-9a97-cc13303ac652/a14a3f3cf1621038aaa6b91ed6413f7062d7d80d342fbfd61b9d9df6d8415df6"
+}

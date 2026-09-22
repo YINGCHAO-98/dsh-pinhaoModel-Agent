@@ -1,0 +1,9 @@
+{
+  "scenario": "synthetic post-write completion",
+  "firstChunkMs": 3067,
+  "elapsedMs": 3071,
+  "finish": {
+    "kind": "stop"
+  },
+  "text": "Created fixture.html containing the word hello."
+}

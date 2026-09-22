@@ -56,13 +56,13 @@ export class SnapshotExplorer {
     for (const entry of entries) {
       if (entry.binary || (args.path && !entry.path.startsWith(args.path))) continue;
       const lines = entry.text.split('\n');
-      for (let index = 0; index < lines.length; index++) {
+      for (let index = 0, lineOffset = 0; index < lines.length; lineOffset += lines[index].length + 1, index++) {
         const column = lines[index].indexOf(args.query);
         if (column < 0) continue;
         if (matched++ < offset) continue;
         if (hits.length === limit) return { hits, nextOffset: offset + limit };
         const snippetStart = Math.max(0, column - 80);
-        hits.push({ path: entry.path, line: index + 1, column: column + 1,
+        hits.push({ path: entry.path, line: index + 1, readOffset: lineOffset + snippetStart, column: column + 1,
           snippet: lines[index].slice(snippetStart, snippetStart + 320) });
       }
     }
@@ -70,15 +70,19 @@ export class SnapshotExplorer {
   }
 }
 
-export function registerExplorer(ctx, explorer) {
+export function registerExplorer(ctx, explorer, workspaces) {
   ctx.tools.register({
     name: 'snapshot_explore',
-    description: 'Explore the current immutable delivery snapshot. list: path prefix, 20 files/page. search: literal query, optional path prefix, 20 matching lines/page. read: exact path, offset/limit in UTF-16 characters, up to 4000/page. Continue with nextOffset until null. No host filesystem access.',
+    description: 'Explore the current immutable delivery snapshot. list: path prefix, 20 files/page. search: literal query, optional path prefix, 20 matching lines/page with readOffset for direct reading. read: exact path, offset/limit in UTF-16 characters, up to 4000/page. Continue with nextOffset until null. No host filesystem access.',
     parameters: { type: 'object', properties: {
       token: { type: 'string' }, action: { type: 'string', enum: ['list', 'search', 'read'] },
       path: { type: 'string' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 4000 },
     }, required: ['token', 'action'], additionalProperties: false },
     output: { schema: { type: 'string' }, render: (_, value) => [{ type: 'text', text: value }] },
-    async execute(args, exec) { return JSON.stringify(explorer.execute(args, exec)); },
+    async execute(args, exec) {
+      const result = explorer.execute(args, exec);
+      if (args.action === 'read' && workspaces) workspaces.find(exec).execution?.push({ tool: 'snapshot_explore', path: args.path, ok: true, at: new Date().toISOString() });
+      return JSON.stringify(result);
+    },
   });
 }

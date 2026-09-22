@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "test:sandbox": "node --test tests/sandbox.integration.mjs",
+    "test:sandbox": "node --test tests/sandbox.integration.mjs tests/worker-sandbox.integration.mjs",
     "test:dsh": "node --test tests/dsh.integration.mjs",
     "test:dsh-e2e": "node --test tests/dsh-e2e.integration.mjs",
-    "demo": "node demo.mjs"
+    "demo": "node demo.mjs",
+    "test:live": "node tests/live-e2e.mjs",
+    "test:live:multimodel": "DSH_LIVE_SCENARIO=multimodel node tests/live-e2e.mjs",
+    "test:live:assistance": "DSH_LIVE_SCENARIO=assistance node tests/live-e2e.mjs"
   }
 }

@@ -20,4 +20,8 @@ description: 使用 Kimi 处理超长上下文、多文档交叉阅读、长报�
 
 不为了填充模板生成无关章节，不代替 DeepSeek 作产品或技术决策。
 
-将完整报告写入父 Agent 指定的路径；未指定时，在工作区创建语义清晰的 Markdown 文件。返回精简摘要、文件绝对路径、关键事实、限制和未解决问题。
+报告包含关键事实、限制和未解决问题。
+
+## 当前运行方式
+
+补充测试和临时文件写入 `$TMPDIR`。将完整交付内容放入 structured_output 的 summary，连同 status、evidence、limitations 返回；报告路径使用工具返回的 reportPath。不能读取的材料必须列为限制，不得虚构观察或测试结果。

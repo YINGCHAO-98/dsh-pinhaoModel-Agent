@@ -1,0 +1,13 @@
+{
+  "scenario": "synthetic long post-write completion",
+  "firstChunkMs": 120108,
+  "elapsedMs": 120108,
+  "finish": {
+    "kind": "error",
+    "failure": {
+      "message": "pi-ai stream idle timeout after 120000ms",
+      "code": "TIMEOUT"
+    }
+  },
+  "text": ""
+}

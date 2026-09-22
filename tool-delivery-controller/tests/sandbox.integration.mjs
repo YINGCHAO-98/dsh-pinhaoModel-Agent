@@ -5,6 +5,21 @@ import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SandboxRunner } from '../runner.mjs';
 import { digest } from '../files.mjs';
+import { singleHtmlContract } from '../html-contract.mjs';
+
+test('single HTML trusted check runs inside the real sandbox without tests directory', async () => {
+  const runner = new SandboxRunner({ nodeExecutable: process.execPath });
+  await runner.preflight();
+  const contract = singleHtmlContract('page.html', { protectedPaths: [], maxRepairs: 2 });
+  for (const [content, kind] of [
+    ['<!doctype html><html><head></head><body><svg></svg><script>throw new Error("not executed")</script></body></html>', 'passed'],
+    ['<!doctype html><html><head></head><body><script>const = ;</script></body></html>', 'failed'],
+  ]) {
+    const files = { 'page.html': Buffer.from(content).toString('base64') };
+    const result = await runner.check({ files, snapshot: digest(files), check: contract.checks[0] });
+    assert.equal(result.kind, kind, JSON.stringify(result));
+  }
+});
 
 test('real sandbox permits checks but blocks snapshot/host writes and host secret reads', async t => {
   const base = await mkdtemp(resolve(tmpdir(), 'delivery-secret-'));

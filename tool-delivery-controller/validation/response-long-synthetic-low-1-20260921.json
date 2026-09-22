@@ -1,0 +1,11 @@
+{
+  "scenario": "synthetic long post-write completion",
+  "firstChunkMs": 2241,
+  "elapsedMs": 2420,
+  "finish": {
+    "kind": "stop"
+  },
+  "text": "Created fixture.html containing the word \"hello\".",
+  "reasoningRepeats": 1,
+  "reasoningEffort": "low"
+}

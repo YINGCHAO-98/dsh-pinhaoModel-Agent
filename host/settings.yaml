@@ -4,12 +4,14 @@ llm-pi-ai:
       doubao:
         {
           displayName: doubao,
+          streamIdleTimeoutMs: 120000,
+          retryPolicy: { mode: normal, maxRetries: 1, retryableCodes: [ EMPTY_RESPONSE, RATE_LIMIT, SERVER, TRANSPORT ] },
           apiKeyEnv: DOUBAO_API_KEY,
           api: openai-completions,
           baseURL: https://ark.cn-beijing.volces.com/api/plan/v3,
           models:
             [
-              { id: deepseek-v4-1-flash, name: deepseek-v4-1-flash, input: [ text, image ] },
+              { id: deepseek-v4-1-flash, name: deepseek-v4-1-flash, input: [ text, image ], maxTokens: 32768, reasoningEfforts: { off: null, low: low, high: high, max: max }, compat: { thinkingFormat: deepseek, supportsReasoningEffort: true } },
               { id: kimi-k2.7-code, name: kimi-k2.7-code },
               { id: minimax-m3, name: minimax-m3, input: [ text, image ] },
               {
@@ -24,6 +26,6 @@ llm-pi-ai:
     }
 agent-default-model:
   provider: doubao
-  model: deepseek-v4-1-flash
+  model: kimi-k2.7-code
 agent-presets:
   default: pin-hao-mo

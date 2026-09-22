@@ -1,0 +1,49 @@
+{
+  "startedAt": "2026-09-21T06:11:04.947Z",
+  "finishedAt": "2026-09-21T06:15:12.511Z",
+  "status": "failed",
+  "output": "/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-XzfI3E",
+  "scenario": "pelican",
+  "workspace": "/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-XzfI3E/project",
+  "agents": [
+    {
+      "createdAt": "2026-09-21T06:11:05.145Z",
+      "id": "live-1789971065114",
+      "parent": null,
+      "provider": "doubao",
+      "model": "deepseek-v4-1-flash"
+    }
+  ],
+  "modelCalls": [
+    {
+      "session": "live-1789971065114",
+      "model": "deepseek-v4-1-flash",
+      "responseId": "0217899710657342eefe40a677d3dbc8be9328f85c8c3aab1bf4f",
+      "usage": {
+        "inputTokens": 5922,
+        "outputTokens": 22158,
+        "totalTokens": 28080
+      }
+    }
+  ],
+  "verification": {
+    "file": "pelican-bicycle.html",
+    "bytes": 13598,
+    "end": {
+      "kind": "error",
+      "error": {
+        "message": "pi-ai stream idle timeout after 120000ms",
+        "code": "TIMEOUT"
+      }
+    },
+    "finalText": "我直接手写这个单文件 SVG 动画（不加载技能、不做验证流程）。",
+    "tools": [
+      {
+        "at": 1789971192411,
+        "name": "write"
+      }
+    ],
+    "failures": []
+  },
+  "failure": "Missing final completion reply"
+}

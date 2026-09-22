@@ -1,0 +1,252 @@
+{
+  "startedAt": "2026-09-21T06:45:16.858Z",
+  "finishedAt": "2026-09-21T06:53:17.070Z",
+  "status": "failed",
+  "output": "/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-81zIdM",
+  "scenario": "pelican-delivery",
+  "workspace": "/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-81zIdM/project",
+  "agents": [
+    {
+      "createdAt": "2026-09-21T06:45:17.062Z",
+      "id": "live-1789973117035",
+      "parent": null,
+      "provider": "doubao",
+      "model": "deepseek-v4-1-flash"
+    },
+    {
+      "createdAt": "2026-09-21T06:45:46.599Z",
+      "id": "884a2752-7403-4a5e-bae4-4980848613db",
+      "parent": "live-1789973117035",
+      "provider": "doubao",
+      "model": "deepseek-v4-1-flash",
+      "disposedAt": "2026-09-21T06:46:29.750Z"
+    },
+    {
+      "createdAt": "2026-09-21T06:46:29.796Z",
+      "id": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "parent": "live-1789973117035",
+      "provider": "doubao",
+      "model": "kimi-k2.7-code",
+      "disposedAt": "2026-09-21T06:50:22.061Z"
+    },
+    {
+      "createdAt": "2026-09-21T06:50:22.077Z",
+      "id": "191d5419-70a3-443e-927a-44b9a4b50db6",
+      "parent": "live-1789973117035",
+      "provider": "doubao",
+      "model": "deepseek-v4-1-flash",
+      "disposedAt": "2026-09-21T06:52:22.094Z"
+    }
+  ],
+  "modelCalls": [
+    {
+      "session": "live-1789973117035",
+      "model": "deepseek-v4-1-flash",
+      "responseId": "0217899731175573ae70deb993b0580bab03c74c65afc7c373766",
+      "usage": {
+        "inputTokens": 36,
+        "outputTokens": 57,
+        "totalTokens": 5981,
+        "cacheReadTokens": 5888
+      }
+    },
+    {
+      "session": "live-1789973117035",
+      "model": "deepseek-v4-1-flash",
+      "responseId": "0217899731372553ae70deb993b0580bab03c74c65afc7cc0203e",
+      "usage": {
+        "inputTokens": 734,
+        "outputTokens": 106,
+        "totalTokens": 6728,
+        "cacheReadTokens": 5888
+      }
+    },
+    {
+      "session": "live-1789973117035",
+      "model": "deepseek-v4-1-flash",
+      "responseId": "0217899731398503587b81e5d6fed80d7b8fbd8e8cb3fa6c2ca1a",
+      "usage": {
+        "inputTokens": 228,
+        "outputTokens": 568,
+        "totalTokens": 7324,
+        "cacheReadTokens": 6528
+      }
+    },
+    {
+      "session": "884a2752-7403-4a5e-bae4-4980848613db",
+      "model": "deepseek-v4-1-flash",
+      "responseId": "0217899731469945c037dcb8e3ed606fc7cba25b86789db64194f",
+      "usage": {
+        "inputTokens": 1818,
+        "outputTokens": 7597,
+        "totalTokens": 9415
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899731901185c037dcb8e3ed606fc7cba25b86789dbe236d8",
+      "usage": {
+        "inputTokens": 2694,
+        "outputTokens": 97,
+        "totalTokens": 4071,
+        "cacheReadTokens": 1280
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899731938215c037dcb8e3ed606fc7cba25b86789dbd2da5b",
+      "usage": {
+        "inputTokens": 601,
+        "outputTokens": 47,
+        "totalTokens": 4488,
+        "cacheReadTokens": 3840
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899731957715c037dcb8e3ed606fc7cba25b86789dbf6c48a",
+      "usage": {
+        "inputTokens": 3601,
+        "outputTokens": 33,
+        "totalTokens": 7986,
+        "cacheReadTokens": 4352
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899731980845c037dcb8e3ed606fc7cba25b86789db130c75",
+      "usage": {
+        "inputTokens": 5382,
+        "outputTokens": 33,
+        "totalTokens": 13351,
+        "cacheReadTokens": 7936
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899732007005c037dcb8e3ed606fc7cba25b86789dbe1dc0b",
+      "usage": {
+        "inputTokens": 146,
+        "outputTokens": 1591,
+        "totalTokens": 15049,
+        "cacheReadTokens": 13312
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899732402075c037dcb8e3ed606fc7cba25b86789db6c7561",
+      "usage": {
+        "inputTokens": 1751,
+        "outputTokens": 52,
+        "totalTokens": 15115,
+        "cacheReadTokens": 13312
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899732427465c037dcb8e3ed606fc7cba25b86789dbef9d6c",
+      "usage": {
+        "inputTokens": 554,
+        "outputTokens": 1269,
+        "totalTokens": 16671,
+        "cacheReadTokens": 14848
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899732728655c037dcb8e3ed606fc7cba25b86789db937c73",
+      "usage": {
+        "inputTokens": 1394,
+        "outputTokens": 98,
+        "totalTokens": 16852,
+        "cacheReadTokens": 15360
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899732764475c037dcb8e3ed606fc7cba25b86789db2086a1",
+      "usage": {
+        "inputTokens": 354,
+        "outputTokens": 57,
+        "totalTokens": 17051,
+        "cacheReadTokens": 16640
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899732787595c037dcb8e3ed606fc7cba25b86789db657cf3",
+      "usage": {
+        "inputTokens": 442,
+        "outputTokens": 1285,
+        "totalTokens": 18623,
+        "cacheReadTokens": 16896
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899733073705c037dcb8e3ed606fc7cba25b86789db2fbe41",
+      "usage": {
+        "inputTokens": 1553,
+        "outputTokens": 48,
+        "totalTokens": 18753,
+        "cacheReadTokens": 17152
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899733096795c037dcb8e3ed606fc7cba25b86789db70785b",
+      "usage": {
+        "inputTokens": 105,
+        "outputTokens": 933,
+        "totalTokens": 19726,
+        "cacheReadTokens": 18688
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899733354925c037dcb8e3ed606fc7cba25b86789dbbcdb99",
+      "usage": {
+        "inputTokens": 1160,
+        "outputTokens": 998,
+        "totalTokens": 20846,
+        "cacheReadTokens": 18688
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899733619945c037dcb8e3ed606fc7cba25b86789db1a3974",
+      "usage": {
+        "inputTokens": 1155,
+        "outputTokens": 937,
+        "totalTokens": 21804,
+        "cacheReadTokens": 19712
+      }
+    },
+    {
+      "session": "fd35a0fd-529b-4c1d-82e8-7fbc365b593d",
+      "model": "kimi-k2.7-code",
+      "responseId": "0217899733888405c037dcb8e3ed606fc7cba25b86789db9c4a58",
+      "usage": {
+        "inputTokens": 1293,
+        "outputTokens": 1219,
+        "totalTokens": 23248,
+        "cacheReadTokens": 20736
+      }
+    }
+  ],
+  "failure": "Expected exactly one HTML output\n\n0 !== 1\n"
+}

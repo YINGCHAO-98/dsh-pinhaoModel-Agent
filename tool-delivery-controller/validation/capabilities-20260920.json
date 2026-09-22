@@ -1,0 +1,58 @@
+{
+  "note": "Two integration samples, not a quality or routing benchmark. Assistance was explicitly requested; simple repair used no optional delegation. These runs preceded a concurrent tool visibility/binding update; final combined changes passed 49 fixture/integration tests. Token counts are provider-reported aggregate usage, not a currency cost estimate.",
+  "cases": [
+    {
+      "scenario": "delivery",
+      "status": "passed",
+      "startedAt": "2026-09-20T09:22:04.982Z",
+      "finishedAt": "2026-09-20T09:25:55.349Z",
+      "elapsedSeconds": 230.367,
+      "modelResponses": {
+        "deepseek-v4-1-flash": 12,
+        "kimi-k2.7-code": 17
+      },
+      "reportedUsageSum": {
+        "inputTokens": 53566,
+        "outputTokens": 11755,
+        "totalTokens": 223401,
+        "cacheReadTokens": 158080
+      },
+      "requestCapabilityCalls": 0,
+      "deliveryId": "23039c11-a04e-450b-998e-62d0bce1274b",
+      "snapshot": "a14a3f3cf1621038aaa6b91ed6413f7062d7d80d342fbfd61b9d9df6d8415df6",
+      "repairCount": 0,
+      "testsUnchanged": true,
+      "reportRefs": [],
+      "qualityAccepted": "passed",
+      "reportPath": "/private/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-7JPA4P/report.json"
+    },
+    {
+      "scenario": "assistance",
+      "status": "passed",
+      "startedAt": "2026-09-20T09:23:57.102Z",
+      "finishedAt": "2026-09-20T09:27:09.838Z",
+      "elapsedSeconds": 192.736,
+      "modelResponses": {
+        "deepseek-v4-1-flash": 13,
+        "minimax-m3": 2,
+        "kimi-k2.7-code": 12
+      },
+      "reportedUsageSum": {
+        "inputTokens": 45248,
+        "outputTokens": 10683,
+        "totalTokens": 210244,
+        "cacheReadTokens": 154313
+      },
+      "requestCapabilityCalls": 1,
+      "deliveryId": "756ccdb0-e449-4e3e-8f41-36b28ef616e5",
+      "snapshot": "a14a3f3cf1621038aaa6b91ed6413f7062d7d80d342fbfd61b9d9df6d8415df6",
+      "repairCount": 0,
+      "testsUnchanged": true,
+      "reportRefs": [
+        "report:059478e9-6dc7-4d47-a5c3-ae9f7eff1aa6"
+      ],
+      "qualityAccepted": "passed",
+      "reportPath": "/private/var/folders/ft/wyt29s3x3_s3c9f9bdqv2rhw0000gn/T/pinhaomo-live-HmXqEa/report.json"
+    }
+  ]
+}

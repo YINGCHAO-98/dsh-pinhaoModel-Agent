@@ -61,7 +61,7 @@ test('capabilities reject parents, other workers, cancellation and expired round
 
 test('failed child startup revokes snapshot access', async () => {
   const explorer = new SnapshotExplorer();
-  const worker = dshWorker({ subagents: { async start() { throw new Error('startup failed'); } } }, {}, explorer);
+  const worker = dshWorker({ subagents: { async start() { throw new Error('startup failed'); } } }, {}, explorer, { open: async () => ({}), close: async () => {} });
   await assert.rejects(worker({ parent: { session: { id: 'parent' } }, signal: new AbortController().signal, files: {} }), /startup failed/);
   assert.equal(explorer.sessions.size, 0);
 });

@@ -5,16 +5,24 @@ description: 解释拼好模固定交付控制器的入口、验收合同、状�
 
 # 固定软件交付流程
 
-当前 preset 的控制机制位于 `../../tool-delivery-controller/`。本 Skill 只是说明，不是流程执行器，当前精简 preset 不自动加载 Skill 工具。
+当前 preset 的控制机制位于 `../../tool-delivery-controller/`。本 Skill 按需加载，只是说明，不是流程执行器。
 
-收到明确的自然语言执行需求时，模型主动调用 `delivery_start`，由控制器运行实现、验证和有界修复。用户也可使用 `/deliver start <目标>` 手动启动同一闭环。
-实现和修复模型只能返回结构化文件变更；控制器应用变更、冻结快照、启动验证、消费修复预算并决定结果。
+收到明确的自然语言执行需求时，模型主动调用 `delivery_start`，由控制器运行实现、验证和有界修复。用户也可使用 `/deliver start <目标>` 手动启动同一闭环。用户明确禁用验证时，必须把该约束原样保留在 objective 中；控制器只允许独立 project 单 HTML 进入 `assurance=unverified`，保留受控同步但跳过检查、审查与修复。禁用 Skill 与禁用验证是两个独立选择。
+将任务必要目标、接口、依赖和验收要求传入 objective，交付状态以 delivery_status 的结果为准。
 
-- `passed`：合同中的所有检查在同一快照上通过；不等价于所有自然语言需求已被证明。
-- `failed`：最多两轮修复后仍未通过。
-- `blocked`：环境、权限、输出格式或执行预算阻塞；保留证据，不当作通过。
+需要总 agent 编排多个实现任务时，用 delivery_start.tasks 登记每项的目标、必要上下文、接口、验收条件、editablePaths 和 dependsOn；控制器固定任务归属并执行依赖，全部通过后再整体集成。checkIds 仅能选择部署合同中已有的检查，不能提交或修改检查命令。简单任务省略 tasks。
+
+独立分步交付指定 mode=partial，在独立副本验收并导出。总 agent 用 mode=project（默认）和 sourceDeliveryIds 汇总同会话已通过的分步产物，控制器重新集成验收，自动同步当前项目并复核，无需例行确认。
+
+兼容的并行修改自动合并；仅对需要用户取舍的 conflicts 提问。控制器直接向宿主用户交互服务提问并核验回答，工具不接受模型提供的冲突选择。已有任务可通过 delivery_resume 再次触发处理，不能自行替用户作行为取舍。普通测试失败由控制器继续有界修复。
+
+project 的 syncReceipt 记录已经同步的版本；projectMatchesReceipt 表示查询时是否仍匹配。外部工具未接入时如实报告，不把文件同步当成工具操作成功。
+
+- `passed`：默认 `assurance=verified` 时，partial 表示独立产物验收通过，project 还必须完成同步与复核；合同检查及配置的 Kimi 质量门禁绑定同一快照。`assurance=unverified` 时只表示单 HTML 已生成并受控同步，`syncReceipt.verified=false`，不得说成验收通过。
+- `failed`：交付未通过，向用户说明返回的失败原因。
+- `blocked`：环境、权限、输出格式或执行预算或待决定的集成冲突阻塞；保留证据，不当作通过。
 - `cancelled`：用户取消，不自动继续。
 - `invalidated`：已导出的验证产物被修改或丢失。
 
 不得再用旧 `workflow` 模板、自报 `status: passed` 或 todo 完成状态代替控制器结果。
-部署、项目验收合同及限制见 [运行时说明](../../tool-delivery-controller/README.md)。
+部署和硬约束由维护者在控制器代码与验收合同中管理。

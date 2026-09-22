@@ -22,7 +22,7 @@ export const fakeRunner = {
     return { id: check.id, snapshot, kind: passed ? 'passed' : 'failed', exitCode: passed ? 0 : 1, stdout: 'test evidence', stderr: '' };
   },
 };
-async function fixture(t, worker, runner = fakeRunner) {
+async function fixture(t, worker, runner = fakeRunner, options = {}) {
   const base = await mkdtemp(resolve(tmpdir(), 'delivery-unit-'));
   const workspace = resolve(base, 'project');
   await mkdir(resolve(workspace, 'src'), { recursive: true });
@@ -31,8 +31,9 @@ async function fixture(t, worker, runner = fakeRunner) {
   await writeFile(resolve(workspace, 'tests/test.cjs'), '// trusted test');
   let store = new Store(resolve(base, 'state'));
   t.after(async () => { try { store.close(); } catch {} await rm(base, { recursive: true, force: true }); });
-  const controller = new DeliveryController({ store, worker, runner });
-  const run = await controller.create({ owner: 'session', workspace, objective: 'Fix value', contract });
+  const controller = new DeliveryController({ store, worker, runner, ...options });
+  const run = await controller.create({ owner: 'session', workspace, objective: 'Fix value', contract: options.contract ?? contract,
+    mode: options.mode ?? 'partial', assurance: options.assurance ?? 'verified' });
   return { base, store, controller, run, reopen() { store.close(); store = new Store(resolve(base, 'state')); return store; } };
 }
 
@@ -40,13 +41,52 @@ test('self-reported success cannot skip verification; failure automatically invo
   const phases = [];
   const f = await fixture(t, async ({ phase }) => { phases.push(phase); return proposal(phase === 'repair' ? 'good' : 'bad'); });
   const result = await f.controller.drive(f.run.id, 'session');
-  assert.equal(result.state, 'passed');
+  assert.equal(result.state, 'passed', result.reason);
   assert.deepEqual(phases, ['implement', 'repair']);
   assert.equal(result.verifyCalls, 2);
   assert.equal(result.repairCount, 1);
   assert.equal(await readFile(resolve(result.artifact, 'src/value.txt'), 'utf8'), 'good');
   assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'bad');
   assert.ok(f.store.history(result.id).some(e => e.kind === 'check.finished'));
+});
+
+test('explicit unverified project delivery skips checks, review and repair but records an unverified sync receipt', async t => {
+  let checks = 0, reviews = 0;
+  const runner = { async preflight() {}, async check() { checks++; throw new Error('must not verify'); } };
+  const f = await fixture(t, async ({ assurance, phase }) => {
+    assert.equal(assurance, 'unverified');
+    assert.equal(phase, 'implement');
+    return proposal('unchecked');
+  }, runner, { mode: 'project', assurance: 'unverified', contract: { ...contract, requiredOutputs: ['src/value.txt'] },
+    qualityGate: { toolName: 'quality', provider: 'p', model: 'm' }, reviewer: async () => { reviews++; } });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.equal(result.assurance, 'unverified');
+  assert.equal(result.verifyCalls, 0);
+  assert.equal(result.repairCount, 0);
+  assert.equal(result.qualityGate, null);
+  assert.equal(result.syncReceipt.verified, false);
+  assert.equal(result.syncReceipt.assurance, 'unverified');
+  assert.equal(checks, 0);
+  assert.equal(reviews, 0);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'unchecked');
+});
+
+test('controller hands accepted reports to worker and blocks when required capability output becomes unavailable', async t => {
+  let calls = 0;
+  const f = await fixture(t, async input => {
+    assert.equal(input.deliveryId, f.run.id);
+    assert.equal(input.upstreamReports[0].id, 'accepted-report');
+    return proposal('good');
+  }, fakeRunner, { deliveryInputs: async () => {
+    if (++calls > 1) throw new Error('Required capability task failed or is incomplete');
+    return [{ id: 'accepted-report', summary: 'authoritative source output' }];
+  } });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'blocked');
+  assert.equal(result.verifyCalls, 0);
+  assert.match(result.reason, /Required capability/);
+  assert.ok(f.store.history(result.id).some(e => e.kind === 'reports.handed_off'));
 });
 
 test('two repairs exhaust the budget; resume cannot reset a terminal run', async t => {
@@ -65,6 +105,100 @@ test('missing sandbox blocks before the first model call', async t => {
   const result = await f.controller.drive(f.run.id, 'session');
   assert.equal(result.state, 'blocked');
   assert.equal(result.workerCalls, 0);
+});
+
+test('output token exhaustion is terminal and resume cannot repeat the generation', async t => {
+  const f = await fixture(t, async () => { throw Object.assign(new Error('Worker output token budget exhausted'), { code: 'WORKER_MAX_TOKENS' }); });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.equal(result.workerCalls, 1);
+  assert.equal((await f.controller.drive(result.id, 'session')).workerCalls, 1);
+});
+
+test('zero-tool timeout retries once then terminates without poisoning the provider route', async t => {
+  const f = await fixture(t, async () => { throw Object.assign(new Error('Worker model produced no tool call before its local execution deadline'), {
+    code: 'WORKER_EXECUTION_TIMEOUT', upstreamCode: 'WORKER_NO_TOOL_DEADLINE', executionCount: 0,
+  }); });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.equal(result.workerCalls, 2);
+  assert.equal((await f.controller.drive(result.id, 'session')).workerCalls, 2);
+  assert.equal(result.reasonCode, 'WORKER_TIMEOUT_RETRIES_EXHAUSTED');
+  assert.equal(result.executionRetries, 1);
+  assert.equal(result.lastWorkerToolCalls, 0);
+  assert.equal(f.store.upstreamBackoff('worker'), null);
+});
+
+test('external resume and new planning are rejected during a real provider cooldown', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project' });
+  const retryNotBefore = Date.now() + 60000;
+  f.store.move(f.run, 'blocked', { reason: 'provider cooling down', reasonCode: 'WORKER_UPSTREAM', retryNotBefore, resumeState: 'implement' });
+  assert.throws(() => f.controller.assertResumeReady(f.store.get(f.run.id)), /DELIVERY_RETRY_NOT_READY/);
+  f.store.deferUpstream('worker', retryNotBefore, 'provider cooling down');
+  assert.throws(() => f.controller.assertWorkerAvailable(), /WORKER_COOLDOWN/);
+});
+
+test('legacy max-tokens blocked tasks stop on resume without another model call', async t => {
+  const f = await fixture(t, async () => { throw new Error('must not execute'); });
+  f.store.move(f.run, 'blocked', { reason: 'Worker did not complete: max-tokens', resumeState: 'implement' });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.equal(result.workerCalls, 0);
+});
+
+test('replacement automatically retires only same-owner legacy output failures', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project' });
+  f.store.move(f.run, 'blocked', { reason: 'Worker did not complete: max-tokens', resumeState: 'implement' });
+  const create = owner => f.controller.create({ owner, workspace: f.run.workspace, objective: 'Smaller replacement', contract });
+  await assert.rejects(create('foreign'), /unfinished delivery/);
+  assert.equal(f.store.get(f.run.id).state, 'blocked');
+  const replacement = await create('session');
+  assert.equal(f.store.get(f.run.id).state, 'failed');
+  assert.equal(f.store.get(f.run.id).workerCalls, 0);
+  assert.equal(replacement.state, 'implement');
+  f.store.move(replacement, 'blocked', { reason: 'Sandbox unavailable', resumeState: 'implement' });
+  await assert.rejects(create('session'), /unfinished delivery/);
+  assert.equal(f.controller.cancel(replacement.id, 'session').state, 'cancelled');
+  assert.equal(f.controller.cancel(replacement.id, 'session').state, 'cancelled');
+  assert.equal((await create('session')).state, 'implement');
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'bad');
+});
+
+test('expired pre-dispatch project reservation from another session is retired before replacement', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project' });
+  f.store.move(f.run, 'blocked', { reason: 'Worker execution deadline exceeded', resumeState: 'implement', retryNotBefore: Date.now() - 1 }, 'upstream.cooldown');
+  const replacement = await f.controller.create({ owner: 'new-session', workspace: f.run.workspace, objective: 'Retry safely', contract, mode: 'project' });
+  const expired = f.store.get(f.run.id);
+  assert.equal(expired.state, 'failed');
+  assert.match(expired.reason, /Expired pre-dispatch reservation/);
+  assert.equal(replacement.state, 'implement');
+  assert.ok(f.store.history(f.run.id).some(event => event.kind === 'reservation.expired'));
+});
+
+test('active or post-implementation blockers remain protected and identify the blocking delivery', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project' });
+  f.store.move(f.run, 'blocked', { reason: 'Worker execution deadline exceeded', resumeState: 'implement', retryNotBefore: Date.now() + 60000 }, 'upstream.cooldown');
+  await assert.rejects(f.controller.create({ owner: 'new-session', workspace: f.run.workspace, objective: 'Too early', contract, mode: 'project' }),
+    error => error.message.includes(f.run.id) && /owned by another session/.test(error.message));
+  const blocked = f.store.get(f.run.id);
+  f.store.move(blocked, 'implement', { retryNotBefore: 0 });
+  f.store.move(blocked, 'implementing', { workerCalls: 1 });
+  f.store.move(blocked, 'verify', { snapshot: blocked.snapshot });
+  f.store.move(blocked, 'blocked', { reason: 'Review unavailable', resumeState: 'verify' });
+  await assert.rejects(f.controller.create({ owner: 'new-session', workspace: f.run.workspace, objective: 'Must not bypass', contract, mode: 'project' }),
+    error => error.message.includes(f.run.id));
+  assert.equal(f.store.get(f.run.id).state, 'blocked');
+});
+
+test('a missing owning session cannot leave a permanent workspace reservation', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project', ownerAlive: owner => owner !== 'deleted-session' });
+  f.store.move(f.run, 'blocked', { reason: 'Worker execution deadline exceeded', resumeState: 'verify' });
+  const stale = f.store.get(f.run.id);
+  f.store.db.prepare('UPDATE runs SET owner=?,data=? WHERE id=?').run('deleted-session', JSON.stringify({ ...stale, owner: 'deleted-session' }), stale.id);
+  const replacement = await f.controller.create({ owner: 'new-session', workspace: f.run.workspace, objective: 'Replace deleted task', contract, mode: 'project' });
+  assert.equal(f.store.get(stale.id).state, 'cancelled');
+  assert.match(f.store.get(stale.id).reason, /no longer exists/);
+  assert.equal(replacement.state, 'implement');
 });
 
 test('protected tests, traversal and duplicate paths cannot be changed', () => {
@@ -110,11 +244,13 @@ test('state changes cannot bypass verification, evidence count or repair limits'
 
 test('workspace lock prevents duplicate execution and same-workspace unfinished jobs', async t => {
   const f = await fixture(t, async () => proposal('good'));
-  const release = f.store.lock(f.run.workspace);
-  assert.throws(() => f.store.lock(f.run.workspace));
+  const release = f.store.lock(f.run.id);
+  assert.throws(() => f.store.lock(f.run.id));
   await assert.rejects(f.controller.drive(f.run.id, 'session'));
   release();
+  const project = await f.controller.create({ owner: 'other', workspace: f.run.workspace, objective: 'Integrate project', contract });
   await assert.rejects(f.controller.create({ owner: 'other', workspace: f.run.workspace, objective: 'Reset budget', contract }));
+  f.controller.cancel(project.id, 'other');
   assert.throws(() => f.store.get(f.run.id, 'other'));
 });
 
@@ -149,4 +285,231 @@ test('process death during repair is recoverable without resetting repair budget
   assert.equal(result.repairCount, 1);
   assert.equal(result.workerCalls, 3);
   assert.ok(recoveredStore.history(result.id).some(e => e.kind === 'interrupted'));
+});
+
+test('startup recovery converts orphaned active execution into an explicit resumable block', async t => {
+  const f = await fixture(t);
+  f.store.move(f.run, 'implementing', { workerCalls: 1 });
+  const recovered = f.store.recoverInterrupted();
+  assert.deepEqual(recovered, [f.run.id]);
+  const run = f.store.get(f.run.id);
+  assert.equal(run.state, 'blocked');
+  assert.equal(run.resumeState, 'implement');
+  assert.match(run.reason, /restarted during active execution/);
+  assert.equal(f.store.history(run.id).at(-1).kind, 'interrupted.recovered');
+});
+
+const qualityGate = { toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2.7-code' };
+const qualityReport = (snapshot, status = 'passed') => ({ ...qualityGate, snapshot, status,
+  summary: 'independent review', evidence: ['node --test: reviewed'], limitations: [] });
+
+test('independent quality failure triggers repair even when contract tests pass', async t => {
+  let reviews = 0;
+  const inputs = [];
+  const f = await fixture(t, async input => { inputs.push(input); return proposal('good'); }, fakeRunner, {
+    qualityGate, reviewer: async ({ snapshot }) => ({ ...qualityReport(snapshot, ++reviews === 1 ? 'failed' : 'passed'), execution: [{ args: 'large private test payload' }] }),
+  });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed');
+  assert.equal(result.repairCount, 1);
+  assert.equal(reviews, 2);
+  assert.ok(inputs[1].evidence.some(e => e.id === 'independent-quality' && e.status === 'failed'));
+  assert.equal(inputs[1].evidence.find(e => e.id === 'independent-quality').execution, undefined);
+  assert.equal(result.quality.model, 'kimi-k2.7-code');
+  assert.equal(result.quality.snapshot, result.snapshot);
+});
+
+test('blocked reviewer cannot pass delivery or consume a repair; saved route survives config changes', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, {
+    qualityGate, reviewer: async ({ route, snapshot }) => { assert.deepEqual(route, qualityGate); return qualityReport(snapshot, 'blocked'); },
+  });
+  f.controller.qualityGate = { ...qualityGate, model: 'other' };
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'blocked');
+  assert.equal(result.resumeState, 'verify');
+  assert.equal(result.repairCount, 0);
+  f.controller.reviewer = async ({ snapshot }) => qualityReport(snapshot);
+  assert.equal((await f.controller.drive(f.run.id, 'session')).state, 'passed');
+});
+
+test('stale review or unavailable reviewer fails closed', async t => {
+  for (const reviewer of [undefined, async () => qualityReport('stale')]) {
+    const f = await fixture(t, async () => proposal('good'), fakeRunner, { qualityGate, reviewer });
+    assert.equal((await f.controller.drive(f.run.id, 'session')).state, 'blocked');
+  }
+});
+
+test('store rejects model-declared pass without matching independent evidence', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { qualityGate });
+  f.store.move(f.run, 'implementing'); f.store.move(f.run, 'verify'); f.store.move(f.run, 'verifying');
+  const evidence = [{ id: 'tests', kind: 'passed', exitCode: 0, snapshot: f.run.snapshot }];
+  assert.throws(() => f.store.move(f.run, 'passed', { evidence }), /quality/);
+  assert.throws(() => f.store.move(f.run, 'passed', { evidence, quality: qualityReport('old') }), /quality/);
+});
+
+test('project mode automatically syncs after acceptance and checks actual project again', async t => {
+  let checks = 0;
+  const f = await fixture(t, async () => proposal('good'), { ...fakeRunner, async check(input) { checks++; return fakeRunner.check(input); } }, { mode: 'project' });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'good');
+  assert.equal(result.syncReceipt.verified, true);
+  assert.equal(checks, 2);
+  assert.equal((await f.controller.status(result.id, 'session')).projectMatchesReceipt, true);
+  await writeFile(resolve(f.run.workspace, 'src/new.txt'), 'later');
+  assert.equal((await f.controller.status(result.id, 'session')).projectMatchesReceipt, false);
+});
+
+test('project integration preserves unrelated concurrent edits and verifies their merged snapshot', async t => {
+  const f = await fixture(t, async () => {
+    await writeFile(resolve(f.run.workspace, 'src/other.txt'), 'another agent');
+    return proposal('good');
+  }, fakeRunner, { mode: 'project' });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/other.txt'), 'utf8'), 'another agent');
+  assert.ok(f.store.files(result.snapshot)['src/other.txt']);
+});
+
+test('overlapping edits stop without overwrite; stale decisions reject; explicit decision re-verifies', async t => {
+  const f = await fixture(t, async () => {
+    await writeFile(resolve(f.run.workspace, 'src/value.txt'), 'concurrent');
+    return proposal('good');
+  }, fakeRunner, { mode: 'project' });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'blocked');
+  assert.equal(result.conflicts[0].path, 'src/value.txt');
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'concurrent');
+  const resolution = { ...result.conflicts[0], take: 'delivery' };
+  await assert.rejects(f.controller.resolveConflicts(result.id, 'session', [resolution]), /forbidden/);
+  assert.equal((await f.controller.drive(result.id, 'session')).state, 'blocked');
+  f.controller.askUser = async ({ questions }) => ({ answers: questions.map(q => ({ id: q.id, selected: ['采用交付版本'] })) });
+  await f.controller.resolveConflicts(result.id, 'session');
+  const completed = await f.controller.drive(result.id, 'session');
+  assert.equal(completed.state, 'passed', completed.reason);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'good');
+  assert.equal(completed.workerCalls, 1);
+});
+
+test('root imports accepted partial artifacts; integration test failure is repaired before sync', async t => {
+  const f = await fixture(t, async () => proposal('good'));
+  const child = await f.controller.drive(f.run.id, 'session');
+  assert.equal(child.state, 'passed');
+  let calls = 0;
+  f.controller.worker = async input => {
+    assert.equal(input.sourceDeliveries[0].id, child.id);
+    assert.equal(Buffer.from(input.files['src/value.txt'], 'base64').toString(), calls ? 'bad' : 'good');
+    return proposal(++calls === 1 ? 'bad' : 'good');
+  };
+  const root = await f.controller.create({ owner: 'session', workspace: f.run.workspace, objective: 'Integrate all work', contract, sourceDeliveryIds: [child.id] });
+  const result = await f.controller.drive(root.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.equal(result.repairCount, 1);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'good');
+});
+
+test('independent partial deliveries coexist; foreign, unfinished and tampered sources reject', async t => {
+  const f = await fixture(t, async () => proposal('good'));
+  const other = await f.controller.create({ owner: 'session', workspace: f.run.workspace, objective: 'Other step', contract, mode: 'partial' });
+  await assert.rejects(f.controller.create({ owner: 'session', workspace: f.run.workspace, objective: 'Integrate', contract, sourceDeliveryIds: [other.id] }));
+  const child = await f.controller.drive(f.run.id, 'session');
+  await assert.rejects(f.controller.create({ owner: 'foreign', workspace: f.run.workspace, objective: 'Integrate', contract, sourceDeliveryIds: [child.id] }));
+  await writeFile(resolve(child.artifact, 'src/value.txt'), 'tampered');
+  await assert.rejects(f.controller.create({ owner: 'session', workspace: f.run.workspace, objective: 'Integrate', contract, sourceDeliveryIds: [child.id] }));
+});
+
+test('project pass cannot be written before synchronization receipt exists', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project' });
+  f.store.move(f.run, 'implementing'); f.store.move(f.run, 'verify'); f.store.move(f.run, 'verifying');
+  assert.throws(() => f.store.move(f.run, 'passed', { evidence: [{ id: 'tests', kind: 'passed', exitCode: 0, snapshot: f.run.snapshot }] }), /synchronization receipt/);
+});
+
+test('interrupted post-sync check resumes without repeating implementation or overwriting new values', async t => {
+  let checks = 0;
+  const f = await fixture(t, async () => proposal('good'), { ...fakeRunner, async check(input) {
+    if (++checks === 2) throw new Error('verification interrupted');
+    return fakeRunner.check(input);
+  } }, { mode: 'project' });
+  const interrupted = await f.controller.drive(f.run.id, 'session');
+  assert.equal(interrupted.state, 'blocked');
+  assert.equal(interrupted.resumeState, 'syncing');
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'good');
+  const completed = await f.controller.drive(f.run.id, 'session');
+  assert.equal(completed.state, 'passed', completed.reason);
+  assert.equal(completed.workerCalls, 1);
+  assert.equal(f.store.history(f.run.id).filter(e => e.kind === 'sync.file_applied').length, 1);
+});
+
+test('modification during acceptance is merged and rechecked before publication', async t => {
+  let checks = 0;
+  const f = await fixture(t, async () => proposal('good'), { ...fakeRunner, async check(input) {
+    if (++checks === 1) await writeFile(resolve(f.run.workspace, 'src/concurrent.txt'), 'concurrent');
+    if (checks > 1) assert.ok(input.files['src/concurrent.txt']);
+    return fakeRunner.check(input);
+  } }, { mode: 'project' });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.equal(checks, 3);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/concurrent.txt'), 'utf8'), 'concurrent');
+});
+
+test('upstream cooldown blocks immediate resume, persists across store reopen and applies to replacement runs', async t => {
+  let calls=0;
+  const f = await fixture(t, async () => { calls++; throw Object.assign(new Error('Request burst protection; Request id: fixture'), {code:'WORKER_UPSTREAM',upstreamCode:'PI_AI_ERROR',cooldownMs:300000}); });
+  const result=await f.controller.drive(f.run.id,'session');
+  assert.equal(result.state,'blocked');assert.match(result.reason,/Request id: fixture/);assert.equal(result.upstreamFailures,1);
+  await f.controller.drive(f.run.id,'session');assert.equal(calls,1);
+  const reopened=f.reopen();f.controller.store=reopened;
+  assert.ok(reopened.upstreamBackoff('worker'));
+  await f.controller.drive(f.run.id,'session');assert.equal(calls,1);
+  f.controller.cancel(f.run.id,'session');
+  const replacement=await f.controller.create({owner:'session',workspace:f.run.workspace,objective:'retry',contract,mode:'partial'});
+  const blocked=await f.controller.drive(replacement.id,'session');
+  assert.equal(blocked.state,'blocked');assert.equal(blocked.workerCalls,0);assert.equal(calls,1);
+});
+
+test('a second upstream failure after cooldown ends the delivery without an infinite recovery loop', async t => {
+  const f = await fixture(t, async () => { throw Object.assign(new Error('TIMEOUT'), {code:'WORKER_UPSTREAM',upstreamCode:'TIMEOUT',cooldownMs:120000}); });
+  await f.controller.drive(f.run.id,'session');
+  const blocked=f.store.get(f.run.id);
+  f.store.move(blocked,'implement',{retryNotBefore:0});
+  f.store.db.prepare('UPDATE upstream_backoff SET until_ms=0').run();
+  const result=await f.controller.drive(f.run.id,'session');
+  assert.equal(result.state,'failed');assert.equal(result.upstreamFailures,2);
+  assert.equal((await f.controller.drive(f.run.id,'session')).workerCalls,2);
+});
+
+test('timeout recovery succeeds in the same delivery and retains validation and repair budgets', async t => {
+  let calls = 0;
+  const f = await fixture(t, async input => {
+    if (++calls === 1) throw Object.assign(new Error('idle timeout'), { code: 'WORKER_UPSTREAM', upstreamCode: 'TIMEOUT', executionCount: 0 });
+    assert.equal(input.recovery.attempt, 1);
+    assert.match(input.recovery.instruction, /complete implementation/);
+    return proposal('good');
+  }, fakeRunner, { mode: 'project' });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.id, f.run.id); assert.equal(result.state, 'passed', result.reason);
+  assert.equal(calls, 2); assert.equal(result.executionRetries, 1); assert.equal(result.repairCount, 0);
+  assert.ok(result.verifyCalls > 0); assert.equal(result.syncReceipt.verified, true);
+  assert.equal(await readFile(resolve(result.workspace, 'src/value.txt'), 'utf8'), 'good');
+  assert.equal(f.store.history(result.id).filter(e => e.kind === 'worker.retry_scheduled').length, 1);
+});
+
+test('timeout after a tool operation is not automatically replayed', async t => {
+  const f = await fixture(t, async () => { throw Object.assign(new Error('timeout after tool'), {
+    code: 'WORKER_EXECUTION_TIMEOUT', upstreamCode: 'WORKER_TOOL_DEADLINE', executionCount: 1 }); });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.workerCalls, 1); assert.equal(result.state, 'failed');
+  assert.equal(result.executionRetries ?? 0, 0);
+});
+
+test('caller cancellation cannot enter automatic timeout recovery', async t => {
+  const abort = new AbortController();
+  const f = await fixture(t, async () => {
+    abort.abort(new Error('user stopped'));
+    throw Object.assign(new Error('timeout'), { code: 'WORKER_EXECUTION_TIMEOUT', executionCount: 0 });
+  });
+  const result = await f.controller.drive(f.run.id, 'session', { signal: abort.signal });
+  assert.equal(result.state, 'cancelled'); assert.equal(result.workerCalls, 1);
+  assert.equal(result.executionRetries ?? 0, 0);
 });

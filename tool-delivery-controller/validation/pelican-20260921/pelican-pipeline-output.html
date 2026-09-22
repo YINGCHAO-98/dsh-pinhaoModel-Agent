@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pelican on a Bicycle</title>
+<style>
+  /* ---------- Page / layout ---------- */
+  :root {
+    --sky-top: #bfe6f7;
+    --sky-bottom: #eaf7fb;
+    --ground: #7cbf6b;
+    --road: #5d6570;
+    --ink: #2c3a46;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 100vh;
+    background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-bottom) 100%);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    overflow: hidden;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(0.95rem, 2.4vw, 1.5rem);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-align: center;
+    padding: 0 12px;
+  }
+
+  /* The stage scales with the viewport without ever overflowing. */
+  .stage {
+    width: min(100vw, 1200px);
+    max-width: 100%;
+    padding: 0 8px;
+  }
+
+  svg#scene {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 78vh;
+    border-radius: 14px;
+    background: transparent;
+    overflow: hidden;
+  }
+
+  .hint {
+    font-size: 0.78rem;
+    opacity: 0.72;
+    padding: 0 12px 6px;
+    text-align: center;
+  }
+
+  /* ---------- Animations ---------- */
+
+  /* Wheel + crank spin: rotate around the group's own centre. */
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  /* Vertical bob for the pelican body / head / wings. */
+  @keyframes bob {
+    0%   { transform: translateY(0); }
+    25%  { transform: translateY(-3px); }
+    50%  { transform: translateY(0); }
+    75%  { transform: translateY(3px); }
+    100% { transform: translateY(0); }
+  }
+
+  /* Pedalling legs: alternate thigh swing, one full cycle per crank turn. */
+  @keyframes pedal-near {
+    0%   { transform: rotate(22deg); }
+    25%  { transform: rotate(-6deg); }
+    50%  { transform: rotate(-24deg); }
+    75%  { transform: rotate(-4deg); }
+    100% { transform: rotate(22deg); }
+  }
+  @keyframes pedal-far {
+    0%   { transform: rotate(-24deg); }
+    25%  { transform: rotate(-4deg); }
+    50%  { transform: rotate(22deg); }
+    75%  { transform: rotate(-6deg); }
+    100% { transform: rotate(-24deg); }
+  }
+
+  /* Background parallax: scroll horizontally, seamlessly looping.
+     Each layer is drawn twice (tile + tile shifted by exactly one tile width)
+     so the loop start and end are pixel-identical. */
+  @keyframes scroll-far {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-400px); }
+  }
+  @keyframes scroll-mid {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-500px); }
+  }
+  @keyframes scroll-near {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-300px); }
+  }
+
+  /* Road dashes travel toward the viewer. */
+  @keyframes road-dash {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-160px); }
+  }
+
+  /* Crank + wheel groups: rotate about a point set in the transform attribute
+     of an outer <g>; the animated node itself has no SVG transform attribute. */
+  #wheel-front-rotor,
+  #wheel-rear-rotor,
+  #crank-rotor {
+    transform-origin: 0 0;
+    animation: spin 0.9s linear infinite;
+  }
+
+  #pelican-bob { animation: bob 0.9s ease-in-out infinite; }
+  #leg-near   { animation: pedal-near 0.9s ease-in-out infinite; }
+  #leg-far    { animation: pedal-far 0.9s ease-in-out infinite; }
+
+  #layer-far  { animation: scroll-far  14s linear infinite; }
+  #layer-mid  { animation: scroll-mid  9s  linear infinite; }
+  #layer-near { animation: scroll-near 5s  linear infinite; }
+  #road-dashes{ animation: road-dash   1.2s linear infinite; }
+
+  /* ---------- Reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    #wheel-front-rotor,
+    #wheel-rear-rotor,
+    #crank-rotor,
+    #pelican-bob,
+    #leg-near,
+    #leg-far,
+    #layer-far,
+    #layer-mid,
+    #layer-near,
+    #road-dashes {
+      animation-duration: 12s;
+      animation-timing-function: linear;
+    }
+  }
+</style>
+</head>
+<body>
+
+<h1>Pelican on a Bicycle</h1>
+
+<div class="stage">
+  <!--
+    Scene: 1000 x 620 user units.
+    Structure:
+      #background  - sky, clouds, hills, trees, road (scrolling layers)
+      #bicycle     - wheels, frame, handlebar, saddle, crank + pedals
+      #pelican     - tail, body, neck, head, beak + pouch, wing, legs
+  -->
+  <svg id="scene" viewBox="0 0 1000 620" role="img"
+       aria-labelledby="scene-title scene-desc"
+       preserveAspectRatio="xMidYMid meet">
+    <title id="scene-title">Animated pelican riding a bicycle</title>
+    <desc id="scene-desc">A cartoon pelican pedals a bicycle while clouds and scenery scroll past.</desc>
+
+    <!-- ============ defs ============ -->
+    <defs>
+      <linearGradient id="sky-gradient" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"   stop-color="#a9dcf2"/>
+        <stop offset="100%" stop-color="#eef9fd"/>
+      </linearGradient>
+      <linearGradient id="beak-gradient" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%"   stop-color="#f7c948"/>
+        <stop offset="100%" stop-color="#e8a020"/>
+      </linearGradient>
+      <radialGradient id="pouch-gradient" cx="0.35" cy="0.25" r="0.85">
+        <stop offset="0%"   stop-color="#ffd97a"/>
+        <stop offset="100%" stop-color="#e39320"/>
+      </radialGradient>
+      <clipPath id="road-clip">
+        <rect x="0" y="470" width="1000" height="150"/>
+      </clipPath>
+    </defs>
+
+    <!-- ============ background ============ -->
+    <g id="background">
+      <rect id="sky" x="0" y="0" width="1000" height="470" fill="url(#sky-gradient)"/>
+
+      <!-- Far clouds: one tile is 400 units wide, drawn twice for a seamless loop -->
+      <g id="layer-far" clip-path="url(#road-clip)">
+        <g id="clouds-tile-a" opacity="0.95">
+          <g fill="#ffffff">
+            <ellipse cx="90"  cy="95"  rx="58" ry="26"/>
+            <ellipse cx="140" cy="80"  rx="42" ry="22"/>
+            <ellipse cx="46"  cy="84"  rx="34" ry="18"/>
+            <ellipse cx="330" cy="140" rx="48" ry="22"/>
+            <ellipse cx="378" cy="128" rx="34" ry="18"/>
+          </g>
+        </g>
+        <g id="clouds-tile-b" transform="translate(400 0)" opacity="0.95">
+          <g fill="#ffffff">
+            <ellipse cx="90"  cy="95"  rx="58" ry="26"/>
+            <ellipse cx="140" cy="80"  rx="42" ry="22"/>
+            <ellipse cx="46"  cy="84"  rx="34" ry="18"/>
+            <ellipse cx="330" cy="140" rx="48" ry="22"/>
+            <ellipse cx="378" cy="128" rx="34" ry="18"/>
+          </g>
+        </g>
+      </g>
+
+      <!-- Distant hills: tile width 500, drawn twice -->
+      <g id="layer-mid">
+        <g id="hills-tile-a" fill="#8ecf9a">
+          <path d="M0 470 L0 400 Q90 320 190 400 Q250 360 320 420 Q400 350 500 430 L500 470 Z"/>
+        </g>
+        <g id="hills-tile-b" transform="translate(500 0)" fill="#8ecf9a">
+          <path d="M0 470 L0 400 Q90 320 190 400 Q250 360 320 420 Q400 350 500 430 L500 470 Z"/>
+        </g>
+      </g>
+
+      <!-- Near trees / bushes: tile width 300, drawn twice -->
+      <g id="layer-near">
+        <g id="bushes-tile-a">
+          <g fill="#5aa85f">
+            <ellipse cx="60"  cy="452" rx="46" ry="30"/>
+            <ellipse cx="100" cy="462" rx="34" ry="22"/>
+            <ellipse cx="240" cy="458" rx="40" ry="26"/>
+          </g>
+          <g fill="#4b8f4f">
+            <rect x="56" y="470" width="8" height="16" rx="3"/>
+            <rect x="238" y="470" width="8" height="16" rx="3"/>
+          </g>
+        </g>
+        <g id="bushes-tile-b" transform="translate(300 0)">
+          <g fill="#5aa85f">
+            <ellipse cx="60"  cy="452" rx="46" ry="30"/>
+            <ellipse cx="100" cy="462" rx="34" ry="22"/>
+            <ellipse cx="240" cy="458" rx="40" ry="26"/>
+          </g>
+          <g fill="#4b8f4f">
+            <rect x="56" y="470" width="8" height="16" rx="3"/>
+            <rect x="238" y="470" width="8" height="16" rx="3"/>
+          </g>
+        </g>
+      </g>
+
+      <!-- Road surface -->
+      <g id="road">
+        <rect x="0" y="470" width="1000" height="150" fill="#9aa3ad"/>
+        <rect x="0" y="470" width="1000" height="10" fill="#7f8892"/>
+        <g id="road-dashes" clip-path="url(#road-clip)" fill="#f4f6f8">
+          <!-- Two identical dash rows offset by one full dash period (160 units). -->
+          <g id="dashes-a">
+            <rect x="20"  y="540" width="80" height="9" rx="4"/>
+            <rect x="180" y="540" width="80" height="9" rx="4"/>
+            <rect x="340" y="540" width="80" height="9" rx="4"/>
+            <rect x="500" y="540" width="80" height="9" rx="4"/>
+            <rect x="660" y="540" width="80" height="9" rx="4"/>
+            <rect x="820" y="540" width="80" height="9" rx="4"/>
+            <rect x="980" y="540" width="80" height="9" rx="4"/>
+          </g>
+          <g id="dashes-b" transform="translate(160 0)">
+            <rect x="20"  y="540" width="80" height="9" rx="4"/>
+            <rect x="180" y="540" width="80" height="9" rx="4"/>
+            <rect x="340" y="540" width="80" height="9" rx="4"/>
+            <rect x="500" y="540" width="80" height="9" rx="4"/>
+            <rect x="660" y="540" width="80" height="9" rx="4"/>
+            <rect x="820" y="540" width="80" height="9" rx="4"/>
+            <rect x="980" y="540" width="80" height="9" rx="4"/>
+          </g>
+        </g>
+      </g>
+    </g>
+
+    <!-- ============ bicycle ============ -->
+    <!--
+      Wheel centres: rear (300, 452), front (700, 452).
+      Crank centre (bottom bracket): (500, 452).
+      Note: every node that carries an SVG transform attribute for positioning
+      is a plain wrapper; the animated rotors below carry NO transform attribute,
+      so CSS rotation and SVG placement never conflict.
+    -->
+    <g id="bicycle">
+
+      <!-- Rear wheel -->
+      <g id="wheel-rear" transform="translate(300 452)">
+        <circle id="tire-rear"   r="86" fill="none" stroke="#2f3a44" stroke-width="12"/>
+        <circle id="rim-rear"    r="76" fill="none" stroke="#c9d3dc" stroke-width="5"/>
+        <circle id="hub-rear"    r="9"  fill="#8b97a2" stroke="#4c5860" stroke-width="3"/>
+        <g id="wheel-rear-rotor">
+          <g id="spokes-rear" stroke="#eef2f5" stroke-width="2.4" stroke-linecap="round">
+            <line x1="0" y1="-74" x2="0" y2="74"/>
+            <line x1="-74" y1="0" x2="74" y2="0"/>
+            <line x1="-52" y1="-52" x2="52" y2="52"/>
+            <line x1="52" y1="-52" x2="-52" y2="52"/>
+            <line x1="-28" y1="-69" x2="28" y2="69"/>
+            <line x1="28" y1="-69" x2="-28" y2="69"/>
+            <line x1="-69" y1="-28" x2="69" y2="28"/>
+            <line x1="69" y1="-28" x2="-69" y2="28"/>
+          </g>
+          <circle r="4" fill="#f4f7f9"/>
+        </g>
+      </g>
+
+      <!-- Front wheel -->
+      <g id="wheel-front" transform="translate(700 452)">
+        <circle id="tire-front" r="86" fill="none" stroke="#2f3a44" stroke-width="12"/>
+        <circle id="rim-front"  r="76" fill="none" stroke="#c9d3dc" stroke-width="5"/>
+        <circle id="hub-front"  r="9"  fill="#8b97a2" stroke="#4c5860" stroke-width="3"/>
+        <g id="wheel-front-rotor">
+          <g id="spokes-front" stroke="#eef2f5" stroke-width="2.4" stroke-linecap="round">
+            <line x1="0" y1="-74" x2="0" y2="74"/>
+            <line x1="-74" y1="0" x2="74" y2="0"/>
+            <line x1="-52" y1="-52" x2="52" y2="52"/>
+            <line x1="52" y1="-52" x2="-52" y2="52"/>
+            <line x1="-28" y1="-69" x2="28" y2="69"/>
+            <line x1="28" y1="-69" x2="-28" y2="69"/>
+            <line x1="-69" y1="-28" x2="69" y2="28"/>
+            <line x1="69" y1="-28" x2="-69" y2="28"/>
+          </g>
+          <circle r="4" fill="#f4f7f9"/>
+        </g>
+      </g>
+
+      <!-- Frame -->
+      <g id="frame" fill="none" stroke="#d94f3d" stroke-width="11" stroke-linecap="round">
+        <path id="frame-down-tube"  d="M500 452 L392 330"/>
+        <path id="frame-seat-tube"  d="M392 330 L318 372"/>
+        <path id="frame-top-tube"   d="M392 330 L604 300"/>
+        <path id="frame-head-tube"  d="M604 300 L700 452"/>
+        <path id="frame-chain-stay" d="M500 452 L300 452"/>
+        <path id="frame-seat-stay"  d="M392 330 L300 452"/>
+        <path id="frame-fork"       d="M604 300 L700 452" stroke="#b8402f"/>
+      </g>
+
+      <!-- Handlebar -->
+      <g id="handlebar">
+        <path id="stem" d="M604 300 L600 262" fill="none" stroke="#4c5860" stroke-width="9" stroke-linecap="round"/>
+        <path id="bar"  d="M556 250 Q600 232 644 252" fill="none" stroke="#4c5860" stroke-width="10" stroke-linecap="round"/>
+        <path id="grip" d="M628 246 L648 254" fill="none" stroke="#2f3a44" stroke-width="14" stroke-linecap="round"/>
+      </g>
+
+      <!-- Saddle -->
+      <g id="saddle">
+        <path id="seat-post" d="M392 330 L386 292" fill="none" stroke="#4c5860" stroke-width="9" stroke-linecap="round"/>
+        <path id="seat" d="M340 288 Q386 268 428 288 Q392 300 340 288 Z" fill="#2f3a44"/>
+      </g>
+
+      <!-- Crank + pedals: crank arm rotates, pedals stay upright relative to it -->
+      <g id="crank" transform="translate(500 452)">
+        <circle id="chainring" r="34" fill="none" stroke="#c9d3dc" stroke-width="6"/>
+        <circle id="chainring-hub" r="10" fill="#8b97a2" stroke="#4c5860" stroke-width="3"/>
+        <g id="crank-rotor">
+          <g id="crank-arm" stroke="#4c5860" stroke-width="10" stroke-linecap="round">
+            <line x1="0" y1="0" x2="0" y2="-46"/>
+            <line x1="0" y1="0" x2="0" y2="46"/>
+          </g>
+          <g id="pedal-far"  transform="translate(0 -46)">
+            <rect x="-17" y="-7" width="34" height="14" rx="5" fill="#2f3a44"/>
+          </g>
+          <g id="pedal-near" transform="translate(0 46)">
+            <rect x="-17" y="-7" width="34" height="14" rx="5" fill="#2f3a44"/>
+          </g>
+        </g>
+      </g>
+    </g>
+
+    <!-- ============ pelican ============ -->
+    <!-- Bobbing group: the CSS `bob` animation moves this whole group up/down. -->
+    <g id="pelican-bob">
+
+      <!-- Far leg (behind the frame), pedalling -->
+      <g id="leg-far">
+        <g transform="translate(392 330)">
+          <path id="thigh-far" d="M0 0 L-14 62" fill="none" stroke="#e8b45a" stroke-width="12" stroke-linecap="round"/>
+          <path id="shin-far"  d="M-14 62 L4 116" fill="none" stroke="#e8b45a" stroke-width="10" stroke-linecap="round"/>
+          <path id="foot-far"  d="M-4 118 L22 122" fill="none" stroke="#d99a33" stroke-width="9" stroke-linecap="round"/>
+        </g>
+      </g>
+
+      <!-- Tail feathers -->
+      <g id="tail" fill="#f2f5f8" stroke="#cdd8e0" stroke-width="2">
+        <path d="M356 300 L286 276 Q322 302 300 322 Q336 318 356 316 Z"/>
+      </g>
+
+      <!-- Body -->
+      <g id="body">
+        <path id="body-shape"
+              d="M352 286 Q372 218 452 214 Q536 210 560 258 Q578 296 552 330 Q516 372 440 368 Q372 364 352 320 Z"
+              fill="#ffffff" stroke="#cdd8e0" stroke-width="3"/>
+        <path id="belly-shade" d="M400 352 Q470 372 540 336 Q500 372 430 370 Z" fill="#e6eef4" opacity="0.9"/>
+      </g>
+
+      <!-- Neck -->
+      <path id="neck"
+            d="M540 250 Q566 200 548 156 Q534 122 570 108 Q608 96 618 130 Q628 168 596 200 Q572 230 566 266 Z"
+            fill="#ffffff" stroke="#cdd8e0" stroke-width="3"/>
+
+      <!-- Head -->
+      <g id="head">
+        <circle id="head-skull" cx="600" cy="120" r="40" fill="#ffffff" stroke="#cdd8e0" stroke-width="3"/>
+        <circle id="eye" cx="614" cy="110" r="7" fill="#2c3a46"/>
+        <circle id="eye-glint" cx="616.5" cy="107" r="2.4" fill="#ffffff"/>
+        <path id="head-crest" d="M578 88 Q594 66 616 78" fill="none" stroke="#cdd8e0" stroke-width="4" stroke-linecap="round"/>
+      </g>
+
+      <!-- Beak (long upper mandible) + throat pouch -->
+      <g id="beak">
+        <path id="pouch"
+              d="M626 128 Q686 132 742 156 Q716 216 646 210 Q618 198 616 152 Z"
+              fill="url(#pouch-gradient)" stroke="#d08b1c" stroke-width="3"/>
+        <path id="upper-mandible"
+              d="M624 108 Q694 110 754 138 Q696 132 626 126 Z"
+              fill="url(#beak-gradient)" stroke="#c9851a" stroke-width="3"/>
+        <path id="beak-line" d="M626 128 Q690 138 748 146" fill="none" stroke="#b57714" stroke-width="2.5" opacity="0.8"/>
+        <path id="beak-tip" d="M754 138 Q762 142 756 150 Q748 146 744 142 Z" fill="#c9851a"/>
+      </g>
+
+      <!-- Wing: flaps very slightly in counter-phase with the bob -->
+      <g id="wing">
+        <path id="wing-shape"
+              d="M420 244 Q500 226 552 258 Q516 288 452 306 Q420 288 420 244 Z"
+              fill="#f7fafc" stroke="#c3cfd8" stroke-width="3"/>
+        <path id="wing-lines" d="M452 258 Q500 258 536 268 M444 278 Q492 280 522 288"
+              fill="none" stroke="#c3cfd8" stroke-width="2.4" stroke-linecap="round"/>
+      </g>
+
+      <!-- Near leg (in front of the frame), pedalling -->
+      <g id="leg-near">
+        <g transform="translate(410 344)">
+          <path id="thigh-near" d="M0 0 L-16 66" fill="none" stroke="#f6cd7c" stroke-width="13" stroke-linecap="round"/>
+          <path id="shin-near"  d="M-16 66 L2 122" fill="none" stroke="#f6cd7c" stroke-width="11" stroke-linecap="round"/>
+          <path id="foot-near"  d="M-6 124 L24 128" fill="none" stroke="#e3ab3d" stroke-width="10" stroke-linecap="round"/>
+        </g>
+      </g>
+    </g>
+  </svg>
+</div>
+
+<p class="hint">Wheels spin, cranks turn, legs pedal — and the scenery rolls by.</p>
+
+<script>
+(function () {
+  'use strict';
+
+  // The animation is CSS-driven (no external libraries). This script only
+  // synchronises the CSS animation clock with the reduced-motion preference
+  // and pauses everything when the tab is hidden, so the loop never jumps
+  // and no work is wasted in the background.
+
+  var ANIMATED = [
+    'wheel-front-rotor',
+    'wheel-rear-rotor',
+    'crank-rotor',
+    'pelican-bob',
+    'leg-near',
+    'leg-far',
+    'layer-far',
+    'layer-mid',
+    'layer-near',
+    'road-dashes'
+  ];
+
+  var roots = [];
+  var reduced = false;
+
+  function eachAnimated(fn) {
+    for (var i = 0; i < ANIMATED.length; i++) {
+      var el = document.getElementById(ANIMATED[i]);
+      if (!el) continue;
+      var anims = el.getAnimations ? el.getAnimations() : [];
+      for (var j = 0; j < anims.length; j++) fn(anims[j], el);
+    }
+  }
+
+  function applyMotionPreference() {
+    // Reduced motion: keep the scene legible but slow the loop right down
+    // instead of removing it (the CSS media query does the same).
+    eachAnimated(function (anim, el) {
+      anim.playbackRate = reduced ? 0.12 : 1;
+      if (reduced) {
+        el.style.animationDuration = '12s';
+      } else {
+        el.style.animationDuration = '';
+      }
+    });
+  }
+
+  function setPaused(paused) {
+    eachAnimated(function (anim) {
+      if (paused) {
+        anim.pause();
+      } else {
+        anim.play();
+      }
+    });
+  }
+
+  if (typeof document.getAnimations === 'function') {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reduced = mq.matches;
+    applyMotionPreference();
+
+    var onChange = function (event) {
+      reduced = event.matches;
+      applyMotionPreference();
+    };
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', onChange);
+    } else if (typeof mq.addListener === 'function') {
+      mq.addListener(onChange);
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      setPaused(document.hidden);
+    });
+  }
+
+  // Expose a tiny hook for manual control / debugging.
+  roots.push({ id: 'scene', animations: ANIMATED.slice() });
+  window.pelicanBicycle = {
+    animatedIds: ANIMATED.slice(),
+    isReducedMotion: function () { return reduced; }
+  };
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "date": "2026-09-20T10:19:53.640412+00:00",
+  "scope": "partial/project delivery, integration, synchronization and conflict recovery",
+  "validation": {
+    "unit_and_real_registry": 54,
+    "dsh_e2e": 3,
+    "sandbox_and_worker": 6,
+    "total_distinct": 63,
+    "passed": true,
+    "real_model_calls": 0,
+    "desktop_existing_session_reloaded": false
+  },
+  "commands": [
+    "DSH_SOURCE=/Users/chowchow/Desktop/codeing/deepseek/deepseek-harness node --test tool-delivery-controller/tests/*.test.mjs tool-delivery-controller/tests/dsh.integration.mjs",
+    "DSH_SOURCE=/Users/chowchow/Desktop/codeing/deepseek/deepseek-harness node --test tool-delivery-controller/tests/dsh-e2e.integration.mjs tool-delivery-controller/tests/sandbox.integration.mjs tool-delivery-controller/tests/worker-sandbox.integration.mjs"
+  ],
+  "targeted_final_rechecks": [
+    "tests/controller.test.mjs",
+    "tests/sync.test.mjs",
+    "tests/dsh-e2e.integration.mjs"
+  ],
+  "limitations": [
+    "Model responses are fixtures; this is mechanism verification, not real model success-rate measurement.",
+    "External application operation adapters are not configured.",
+    "Partial artifact import is limited to the same coordinator session and workspace.",
+    "Synchronization is journaled per file; noncooperating external writers do not participate in a filesystem-wide atomic transaction.",
+    "Skill quick_validate.py could not run because PyYAML is unavailable; DSH YAML metadata parsing and real preset loading passed."
+  ],
+  "sha256": {
+    "AGENTS.md": "b74af992576ff5050e263186a0314ceba926c80a717678b82bae04935f6dd8e8",
+    "agent.cordis.yml": "0f8cb29bf29a940567bd6b4f0ab2732d157575f12de442dbd0554d64ab8cf2a0",
+    "delivery-contract.json": "6e9fd7e2ac65d9cd91c0f13bf04fb5bd4bce74e0892b4fd118802f1f7d82f799",
+    "tool-delivery-controller/controller.mjs": "ad6d29afc4b89a1e61e0a789f8495f2142826da0686bb0cd36da76566dfc749f",
+    "tool-delivery-controller/store.mjs": "b5c99c0418d94330fb6b3b1ae23a1816aafaf61ce7b8c3e9bbb5f2e8114734a7",
+    "tool-delivery-controller/sync.mjs": "49bc646695121576e216fb7c6daf3c68c856aed3cfbdf34f56ab813101e1b32a",
+    "tool-delivery-controller/index.mjs": "221c48e882960d6ced463929e8e28b137b32c8c9f97686fbf8dfeb0a7e84aeba",
+    "tool-delivery-controller/tool-policy.mjs": "f78910bcfee70859aa7179ad414de9821477dbc4583ced74e7ddfc0869173ac5",
+    "tool-delivery-controller/capabilities.mjs": "2c09713838c3edcab53dc8f99d614ed86a1fd6e75aaea211d69161dc08ccfd6a",
+    "skills/software-delivery-harness/SKILL.md": "de10d37f7021e6b65726f6e6d61ec4369e34c14e2e4507ec04b406adc8e0cd6e"
+  }
+}

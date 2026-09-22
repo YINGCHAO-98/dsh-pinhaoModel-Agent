@@ -1,10 +1,11 @@
 {
   "version": 1,
-  "editablePaths": ["src/"],
-  "protectedPaths": ["tests/", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"],
-  "requiredPaths": ["tests/"],
-  "checks": [
-    { "id": "node-tests", "argv": ["node", "--test", "--test-reporter=tap"], "timeoutMs": 60000, "minTests": 1 }
+  "editablePaths": [
+    "**"
   ],
-  "maxRepairs": 2
+  "protectedPaths": [],
+  "requiredPaths": [],
+  "checks": [],
+  "maxRepairs": 2,
+  "layout": "workspace"
 }
