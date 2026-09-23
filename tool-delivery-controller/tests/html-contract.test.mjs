@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { singleHtmlContract } from '../html-contract.mjs';
+import { singleHtmlContract, htmlStructureRegression } from '../html-contract.mjs';
 import { applyProposal, validateContract } from '../files.mjs';
 import { DeliveryController } from '../controller.mjs';
 import { Store } from '../store.mjs';
@@ -35,7 +35,9 @@ test('trusted HTML check rejects placeholder documents and broken script syntax'
     const result = spawnSync(process.execPath, contract.checks[0].argv.slice(1), { cwd: root, encoding: 'utf8' });
     return result;
   };
-  for (const content of ['placeholder', html.replace('const frame = 0;', 'const = ;'), html.replace('<script>', '<script src="external.js">')]) {
+  for (const content of ['placeholder', html.replace('const frame = 0;', 'const = ;'), html.replace('<script>', '<script src="external.js">'),
+    html + '<body><svg></svg></body></html>', html.replace('</html>', '</html><svg></svg>'),
+    html.replace('<svg></svg>', '<svg></svg><img src="https://example.com/pixel.png">')]) {
     await writeFile(resolve(root, path), content);
     assert.notEqual(check().status, 0);
   }
@@ -90,4 +92,32 @@ test('SVG positioning cannot be overwritten by CSS transform animation', async t
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /SVG_TRANSFORM_ANIMATION_CONFLICT/);
   assert.equal((await run('<g transform="translate(110,250)"><g id="rear"><circle r="20"/></g></g>')).status, 0);
+});
+
+test('verified single HTML updates reject gross loss of drawable structure and named parts', async t => {
+  const root = await mkdtemp(resolve(tmpdir(), 'html-regression-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = resolve(root, 'project');
+  await mkdir(workspace);
+  const rich = '<!doctype html><html><head></head><body><svg>'
+    + Array.from({ length: 80 }, (_, i) => `<circle class="part${i % 12}" cx="${i}" cy="5" r="2"/>`).join('')
+    + '</svg></body></html>';
+  const truncated = '<!doctype html><html><head></head><body><svg>'
+    + Array.from({ length: 20 }, (_, i) => `<circle class="part${i % 2}" cx="${i}" cy="5" r="2"/>`).join('')
+    + '</svg></body></html>';
+  assert.ok(htmlStructureRegression(rich, truncated));
+  assert.equal(htmlStructureRegression(rich, rich), null);
+  await writeFile(resolve(workspace, path), rich);
+  const store = new Store(resolve(root, 'state'));
+  t.after(() => store.close());
+  const delivery = new DeliveryController({ store, worker: async () => proposal(truncated), reviewPolicy: 'on_request',
+    runner: { async preflight() {}, async check({ check, snapshot }) {
+      return { id: check.id, snapshot, kind: 'passed', exitCode: 0 };
+    } } });
+  const run = await delivery.create({ owner: 'session', workspace, objective: 'Update the animation',
+    contract: singleHtmlContract(path, { ...baseContract, maxRepairs: 0 }) });
+  const result = await delivery.drive(run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.equal(result.evidence[0].reasonCode, 'HTML_STRUCTURE_REGRESSION');
+  assert.equal(await readFile(resolve(workspace, path), 'utf8'), rich);
 });

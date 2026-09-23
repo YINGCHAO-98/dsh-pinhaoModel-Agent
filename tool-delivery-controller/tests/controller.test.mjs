@@ -115,6 +115,65 @@ test('output token exhaustion is terminal and resume cannot repeat the generatio
   assert.equal((await f.controller.drive(result.id, 'session')).workerCalls, 1);
 });
 
+test('zero-tool output exhaustion retries once with recovery then completes', async t => {
+  let calls = 0;
+  const f = await fixture(t, async input => {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error('Output budget exhausted'), { code: 'WORKER_MAX_TOKENS', executionCount: 0 });
+    assert.equal(input.recovery?.reason, 'output_limit_without_tool_calls');
+    return proposal('good');
+  });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.equal(calls, 2);
+  assert.equal(result.outputRetries, 1);
+  assert.ok(f.store.history(result.id).some(event => event.kind === 'worker.output_retry_started'));
+});
+
+test('zero-tool output exhaustion stops after one recovery attempt', async t => {
+  let calls = 0;
+  const f = await fixture(t, async () => {
+    calls++;
+    throw Object.assign(new Error('Output budget exhausted'), { code: 'WORKER_MAX_TOKENS', executionCount: 0 });
+  });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.equal(result.reasonCode, 'WORKER_MAX_TOKENS');
+  assert.equal(calls, 2);
+  assert.equal((await f.controller.drive(result.id, 'session')).workerCalls, 2);
+});
+
+test('repeated zero-tool failures dispatch one controlled recovery route with the same contract', async t => {
+  const routes = [];
+  const f = await fixture(t, async input => {
+    routes.push(input.recovery?.route ?? 'primary');
+    if (routes.length <= 2) throw Object.assign(new Error('No tool call before deadline'), {
+      code: 'WORKER_EXECUTION_TIMEOUT', upstreamCode: 'WORKER_NO_ARTIFACT_DEADLINE', executionCount: 2, safeToRetry: true,
+    });
+    assert.equal(input.contract.editablePaths[0], 'src/');
+    return proposal('good');
+  }, fakeRunner, { recoveryWorkerAvailable: true });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason);
+  assert.deepEqual(routes, ['primary', 'primary', 'recovery-worker']);
+  assert.equal(result.recoveryAttempts, 1);
+  assert.equal(result.verifyCalls, 1);
+});
+
+test('recovery route is not retried after its own zero-tool failure', async t => {
+  const routes = [];
+  const f = await fixture(t, async input => {
+    routes.push(input.recovery?.route ?? 'primary');
+    throw Object.assign(new Error('No tool call before deadline'), {
+      code: 'WORKER_EXECUTION_TIMEOUT', upstreamCode: 'WORKER_NO_TOOL_DEADLINE', executionCount: 0,
+    });
+  }, fakeRunner, { recoveryWorkerAvailable: true });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.deepEqual(routes, ['primary', 'primary', 'recovery-worker']);
+  assert.equal(result.reasonCode, 'WORKER_TIMEOUT_RETRIES_EXHAUSTED');
+});
+
 test('zero-tool timeout retries once then terminates without poisoning the provider route', async t => {
   const f = await fixture(t, async () => { throw Object.assign(new Error('Worker model produced no tool call before its local execution deadline'), {
     code: 'WORKER_EXECUTION_TIMEOUT', upstreamCode: 'WORKER_NO_TOOL_DEADLINE', executionCount: 0,
@@ -512,4 +571,87 @@ test('caller cancellation cannot enter automatic timeout recovery', async t => {
   const result = await f.controller.drive(f.run.id, 'session', { signal: abort.signal });
   assert.equal(result.state, 'cancelled'); assert.equal(result.workerCalls, 1);
   assert.equal(result.executionRetries ?? 0, 0);
+});
+
+test('review timeout retries the same snapshot without regenerating implementation', async t => {
+  let reviews = 0;
+  const gate = { toolName: 'quality', provider: 'p', model: 'm' };
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project', qualityGate: gate,
+    reviewer: async ({ snapshot }) => {
+      if (++reviews === 1) throw Object.assign(new Error('review timeout'), { code: 'WORKER_EXECUTION_TIMEOUT' });
+      return { status: 'passed', provider: 'p', model: 'm', snapshot, evidence: ['inspected output'] };
+    } });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'passed', result.reason); assert.equal(result.workerCalls, 1);
+  assert.equal(result.qualityRetries, 1); assert.equal(result.syncReceipt.verified, true);
+});
+
+test('exhausted automatic review recovery terminates without regenerating or synchronizing', async t => {
+  let reviews = 0;
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project', qualityGate: { provider: 'p', model: 'm' },
+    reviewer: async () => { reviews++; throw Object.assign(new Error('review timeout'), { code: 'WORKER_EXECUTION_TIMEOUT' }); } });
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed'); assert.equal(result.reasonCode, 'QUALITY_TIMEOUT_RETRIES_EXHAUSTED');
+  assert.equal(result.workerCalls, 1); assert.equal(reviews, 2); assert.equal(result.syncReceipt, undefined);
+  assert.equal((await f.controller.drive(f.run.id, 'session')).workerCalls, 1);
+  assert.equal(await readFile(resolve(result.workspace, 'src/value.txt'), 'utf8'), 'bad');
+});
+
+test('on-request review never delays file delivery; timeout preserves receipt and file', async t => {
+  let reviews = 0;
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project', reviewPolicy: 'on_request',
+    qualityGate: { ...qualityGate, timeoutMs: 15 }, reviewer: async ({ signal, context }) => {
+      reviews++;
+      assert.deepEqual(JSON.parse(context).changedPaths, ['src/value.txt']);
+      assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'good');
+      // A nonresponsive upstream must not defeat the controller deadline.
+      return new Promise(() => {});
+    } });
+  const delivered = await f.controller.drive(f.run.id, 'session');
+  assert.equal(delivered.state, 'passed');
+  assert.equal(reviews, 0);
+  assert.equal(delivered.qualityGate, null);
+  const receipt = delivered.syncReceipt;
+  const reviewed = await f.controller.review(f.run.id, 'session');
+  assert.equal(reviews, 1);
+  assert.equal(reviewed.state, 'passed');
+  assert.equal(reviewed.review.status, 'incomplete');
+  assert.equal(reviewed.review.reasonCode, 'REVIEW_TIMEOUT');
+  assert.deepEqual(reviewed.syncReceipt, receipt);
+  assert.equal(reviewed.workerCalls, 1);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'good');
+  const reopened = f.reopen();
+  const restored = new DeliveryController({ store: reopened });
+  assert.equal((await restored.status(f.run.id, 'session')).review.reasonCode, 'REVIEW_TIMEOUT');
+});
+
+test('on-request review failure and stale evidence cannot change delivery state or trigger repairs', async t => {
+  const f = await fixture(t, async () => proposal('good'), fakeRunner, { mode: 'project', reviewPolicy: 'on_request',
+    qualityGate, reviewer: async ({ snapshot }) => qualityReport(snapshot, 'failed') });
+  await assert.rejects(f.controller.review(f.run.id, 'session'), /already completed/);
+  await f.controller.drive(f.run.id, 'session');
+  await assert.rejects(f.controller.review(f.run.id, 'foreign'), /not found/);
+  let result = await f.controller.review(f.run.id, 'session');
+  assert.equal(result.review.status, 'failed');
+  assert.equal(result.state, 'passed');
+  assert.equal(result.repairCount, 0);
+  f.controller.reviewer = async () => qualityReport('stale');
+  result = await f.controller.review(f.run.id, 'session');
+  assert.equal(result.review.status, 'incomplete');
+  assert.equal(result.state, 'passed');
+  assert.equal(result.workerCalls, 1);
+  const abort = new AbortController(); abort.abort(new Error('Stop review'));
+  result = await f.controller.review(f.run.id, 'session', { signal: abort.signal });
+  assert.equal(result.review.reasonCode, 'REVIEW_CANCELLED');
+  assert.equal(result.state, 'passed');
+});
+
+test('optional model review still requires local tests and immutable delivery policy', async t => {
+  const f = await fixture(t, async () => proposal('bad'), fakeRunner, { mode: 'project', reviewPolicy: 'on_request', qualityGate });
+  assert.throws(() => f.store.move(f.run, 'implementing', { reviewPolicy: 'required' }), /Immutable/);
+  const result = await f.controller.drive(f.run.id, 'session');
+  assert.equal(result.state, 'failed');
+  assert.equal(result.repairCount, 2);
+  assert.equal(result.syncReceipt, undefined);
+  assert.equal(await readFile(resolve(f.run.workspace, 'src/value.txt'), 'utf8'), 'bad');
 });

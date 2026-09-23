@@ -4,9 +4,12 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { digest, hash } from './files.mjs';
+import { assertDesignReceipt } from './product-design.mjs';
 
 const TERMINAL = new Set(['passed', 'failed', 'cancelled', 'invalidated']);
 const transitions = {
+  design: ['designing', 'blocked', 'failed', 'cancelled'],
+  designing: ['collecting', 'implement', 'blocked', 'failed', 'cancelled'],
   collecting: ['implement', 'blocked', 'cancelled'],
   queued: ['implement', 'blocked', 'cancelled'],
   implement: ['implementing', 'blocked', 'cancelled'],
@@ -16,7 +19,7 @@ const transitions = {
   syncing: ['syncing', 'passed', 'verify', 'blocked', 'cancelled'],
   repair: ['repairing', 'blocked', 'cancelled'],
   repairing: ['verify', 'failed', 'blocked', 'cancelled'],
-  blocked: ['collecting', 'queued', 'implement', 'repair', 'verify', 'syncing', 'failed', 'cancelled'],
+  blocked: ['design', 'collecting', 'queued', 'implement', 'repair', 'verify', 'syncing', 'failed', 'cancelled'],
   passed: ['invalidated'],
   failed: [], cancelled: [], invalidated: [],
 };
@@ -42,8 +45,8 @@ export class Store {
   }
   close() { this.db.close(); }
   recoverInterrupted() {
-    const resume = { implementing: 'implement', repairing: 'repair', verifying: 'verify' };
-    const interrupted = this.db.prepare("SELECT data FROM runs WHERE json_extract(data,'$.state') IN ('implementing','repairing','verifying')").all();
+    const resume = { designing: 'design', implementing: 'implement', repairing: 'repair', verifying: 'verify' };
+    const interrupted = this.db.prepare("SELECT data FROM runs WHERE json_extract(data,'$.state') IN ('designing','implementing','repairing','verifying')").all();
     const recovered = [];
     for (const row of interrupted) {
       const run = JSON.parse(row.data);
@@ -92,24 +95,27 @@ export class Store {
   event(id, kind, data = {}) {
     this.db.prepare('INSERT INTO events(run,at,kind,data) VALUES(?,?,?,?)').run(id, new Date().toISOString(), kind, JSON.stringify(data));
   }
-  create({ owner, workspace, objective, contract, files, qualityGate = null, reportRefs = [], mode = 'partial', assurance = 'verified', sourceDeliveries = [], initialFiles = files, tasks = [] }) {
+  create({ owner, workspace, objective, contract, taskIR = null, files, designGate = null, qualityGate = null, reviewPolicy = 'required', reviewRoute = null, reportRefs = [], mode = 'partial', assurance = 'verified', sourceDeliveries = [], initialFiles = files, tasks = [] }) {
     return this.transaction(() => {
       this.assertStartAllowed(owner, workspace, mode);
       if (!['verified', 'unverified'].includes(assurance)) throw new Error('Invalid assurance');
-      const run = { id: randomUUID(), owner, workspace, objective, contract, qualityGate, reportRefs, mode, assurance, sourceDeliveries, tasks: tasks.map(t => ({ ...t, runId: randomUUID() })), syncAttempts: 0, state: tasks.length || sourceDeliveries.length ? 'collecting' : 'implement', repairCount: 0,
+      const run = { id: randomUUID(), owner, workspace, objective, contract, taskIR, designGate, designAttempts: 0, productDesign: null, qualityGate, reviewPolicy, reviewRoute, reportRefs, mode, assurance, sourceDeliveries, tasks: tasks.map(t => ({ ...t, runId: randomUUID() })), syncAttempts: 0, state: designGate ? 'design' : tasks.length || sourceDeliveries.length ? 'collecting' : 'implement', repairCount: 0,
         workerCalls: 0, verifyCalls: 0, snapshot: this.snapshot(initialFiles), baseSnapshot: this.snapshot(files), evidence: [], version: 0,
         contractHash: hash(JSON.stringify(contract)) };
       run.taskManifestHash = hash(JSON.stringify(run.tasks));
       for (const task of run.tasks) {
         const childContract = { ...contract, editablePaths: task.editablePaths, checks: task.checkIds ? contract.checks.filter(c => task.checkIds.includes(c.id)) : contract.checks };
+        childContract.checkIds = childContract.checks.map(c => c.id);
         const child = { ...run, id: task.runId, parentId: run.id, taskKey: task.id, taskContext: task,
           tasks: [], taskManifestHash: hash('[]'), sourceDeliveries: [], reportRefs: [], mode: 'partial', state: 'queued',
-          objective: task.objective, contract: childContract, contractHash: hash(JSON.stringify(childContract)) };
+          objective: task.objective, taskIR: taskIR ? { ...taskIR, goal: task.objective, editablePaths: task.editablePaths,
+            availableChecks: childContract.checks, validation: taskIR.validation.filter(v => v.taskId === task.id) } : null, contract: childContract, contractHash: hash(JSON.stringify(childContract)) };
         this.db.prepare('INSERT INTO runs VALUES(?,?,?,?)').run(child.id, owner, workspace, JSON.stringify(child));
         this.event(child.id, 'task.registered', { parentId: run.id, task });
       }
       this.db.prepare('INSERT INTO runs VALUES(?,?,?,?)').run(run.id, owner, workspace, JSON.stringify(run));
       this.event(run.id, 'created', run);
+      if (taskIR) this.event(run.id, 'contract.compiled', { taskIR, contractHash: run.contractHash, checkIds: contract.checkIds });
       return run;
     });
   }
@@ -174,11 +180,25 @@ export class Store {
       const current = this.get(run.id);
       if (current.version !== run.version) throw new Error('Concurrent delivery update');
       if (!transitions[current.state]?.includes(state)) throw new Error(`Invalid transition ${current.state} -> ${state}`);
-      for (const key of ['owner', 'workspace', 'parentId', 'taskKey', 'taskContext', 'tasks', 'taskManifestHash', 'mode', 'assurance', 'contract', 'contractHash']) {
+      const finishingDesign = current.state === 'designing' && ['collecting', 'implement'].includes(state);
+      if (Object.hasOwn(patch, 'productDesign') && !finishingDesign) throw new Error('Product design is immutable outside design completion');
+      if (finishingDesign) {
+        assertDesignReceipt(current, patch.productDesign);
+        const expectedGate = current.assurance !== 'unverified' && current.reviewPolicy === 'risk_based' && patch.productDesign.plan.riskLevel === 'high'
+          ? current.reviewRoute : current.qualityGate;
+        if (JSON.stringify(patch.qualityGate ?? null) !== JSON.stringify(expectedGate ?? null)) throw new Error('Invalid design review gate');
+        if (current.reviewPolicy === 'risk_based' && patch.productDesign.plan.riskLevel === 'high' && current.assurance !== 'unverified' && !expectedGate)
+          throw new Error('High-risk design requires an independent reviewer');
+      }
+      for (const key of ['owner', 'workspace', 'objective', 'baseSnapshot', 'designGate', 'parentId', 'taskKey', 'taskContext', 'tasks', 'taskManifestHash', 'mode', 'assurance', ...(!finishingDesign ? ['qualityGate'] : []), 'reviewPolicy', 'reviewRoute', 'contract', 'contractHash', 'taskIR']) {
         if (Object.hasOwn(patch, key) && JSON.stringify(patch[key]) !== JSON.stringify(current[key])) throw new Error('Immutable task identity/contract: ' + key);
       }
       if (['implement', 'verifying', 'syncing', 'passed'].includes(state) && current.tasks?.length)
         this.assertTasks(current, patch.sourceDeliveries ?? current.sourceDeliveries);
+      if (['collecting', 'implement', 'implementing', 'repairing', 'verifying', 'syncing', 'passed'].includes(state) && current.designGate) {
+        const ownerRun = current.parentId ? this.get(current.parentId, current.owner) : current;
+        assertDesignReceipt(ownerRun, finishingDesign ? patch.productDesign : ownerRun.productDesign);
+      }
       if (current.conflicts?.length && state !== 'cancelled' && state !== 'blocked') {
         const receipt = this.db.prepare('SELECT * FROM decisions WHERE id=?').get(patch.decisionId ?? '');
         if (!receipt || receipt.run !== current.id || receipt.owner !== current.owner || receipt.version !== current.version || receipt.state !== 'answered')

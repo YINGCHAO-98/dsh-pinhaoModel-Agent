@@ -11,15 +11,22 @@ test('role policy distinguishes root, authorized worker, specialist, cancelled a
   const policy = toolPolicy(workspaces, ['task_glm_vision']);
   const call = (name, id = 'worker', parentSession = 'root') => policy({ name, agent: { session: { id, header: { parentSession } } } });
   assert.match(call('bash', 'root', null), /ROOT_TOOL_NOT_ALLOWED/);
-  for (const name of ['read', 'write', 'edit', 'glob', 'grep']) assert.equal(call(name, 'root', null), undefined);
+  assert.match(call('html_chunk', 'root', null), /ROOT_TOOL_NOT_ALLOWED/);
+  for (const name of ['read', 'glob', 'grep']) assert.equal(call(name, 'root', null), undefined);
+  for (const name of ['write', 'edit']) assert.match(call(name, 'root', null), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
   assert.equal(call('delivery_start', 'root', null), undefined);
   assert.equal(call('delivery_resume', 'root', null), undefined);
   assert.equal(call('delivery_cancel', 'root', null), undefined);
+  assert.equal(call('delivery_review', 'root', null), undefined);
+  assert.match(call('delivery_review'), /CHILD_ORCHESTRATION_DENIED/);
   assert.match(call('delivery_cancel'), /CHILD_ORCHESTRATION_DENIED/);
   assert.match(call('delivery_resume'), /CHILD_ORCHESTRATION_DENIED/);
   assert.equal(call('task_glm_vision', 'root', null), undefined);
   assert.equal(call('bash'), undefined);
   assert.match(call('edit'), /WORKER_TOOL_NOT_ALLOWED/);
+  assert.match(call('html_chunk'), /WORKER_TOOL_NOT_ALLOWED/);
+  session.allowedTools.push('html_chunk');
+  assert.equal(call('html_chunk'), undefined);
   assert.match(call('delivery_start'), /CHILD_ORCHESTRATION_DENIED/);
   session.allowedTools = ['read']; session.readOnly = true;
   assert.equal(call('read'), undefined);
@@ -30,43 +37,45 @@ test('role policy distinguishes root, authorized worker, specialist, cancelled a
   assert.match(call('read'), /WORKER_NOT_BOUND/);
 });
 
-test('terminal worker failure removes user-question and same-turn restart escape hatches', () => {
+test('root can ask for missing input and start another bounded delivery in the same turn', () => {
   const workspaces = new WorkerWorkspaces({});
   const policy = toolPolicy(workspaces, []);
   const call = name => policy({ name, agent: { session: { id: 'root', header: {} } } });
-  workspaces.beginRootTurn('root', '制作 SVG 动画');
-  workspaces.protectRoot('root', 'scene.html');
-  assert.match(call('ask_user_question'), /CONTROLLED_DELIVERY_QUESTION_DENIED/);
-  workspaces.blockTerminalDeliveryTurn('root', { id: 'delivery-1', reasonCode: 'WORKER_NO_TOOL_DEADLINE' });
-  assert.match(call('ask_user_question'), /TERMINAL_DELIVERY_DECISION_DENIED/);
-  assert.match(call('delivery_start'), /TERMINAL_DELIVERY_RESTART_DENIED/);
-  workspaces.beginRootTurn('root', '请缩小范围后重新实现');
   assert.equal(call('ask_user_question'), undefined);
   assert.equal(call('delivery_start'), undefined);
 });
 
-test('controlled animation output rejects root mutation until a new user turn clears it', () => {
+test('terminal output exhaustion hides same-turn mutation and restart tools until the next user turn', () => {
+  const workspaces = new WorkerWorkspaces({});
+  const policy = toolPolicy(workspaces, []);
+  const agent = { session: { id: 'root', header: {} } };
+  workspaces.blockTerminalDeliveryTurn('root', { id: 'delivery-1', state: 'failed', reasonCode: 'WORKER_MAX_TOKENS' });
+  for (const name of ['write', 'edit']) assert.match(policy({ name, agent }), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  assert.match(policy({ name: 'delivery_start', agent }), /TERMINAL_DELIVERY/);
+  for (const name of ['read', 'glob', 'grep', 'delivery_status']) assert.equal(policy({ name, agent }), undefined);
+  workspaces.beginRootTurn('root', '继续处理，但请缩小范围');
+  for (const name of ['write', 'edit']) assert.match(policy({ name, agent }), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  assert.equal(policy({ name: 'delivery_start', agent }), undefined);
+});
+
+test('exhausted no-tool recovery also blocks a new delivery in the same turn', () => {
+  const workspaces = new WorkerWorkspaces({});
+  const policy = toolPolicy(workspaces, []);
+  const agent = { session: { id: 'root', header: {} } };
+  workspaces.blockTerminalDeliveryTurn('root', { id: 'delivery-2', state: 'failed', reasonCode: 'WORKER_TIMEOUT_RETRIES_EXHAUSTED' });
+  assert.match(policy({ name: 'delivery_start', agent }), /TERMINAL_DELIVERY_RESTART_DENIED/);
+  workspaces.beginRootTurn('root', '继续处理');
+  assert.equal(policy({ name: 'delivery_start', agent }), undefined);
+});
+
+test('all root file changes are forced through the configured implementation worker', () => {
   const workspaces = new WorkerWorkspaces({});
   workspaces.beginRootTurn('direct', '制作一个 SVG 动画');
-  assert.equal(workspaces.animationContext('direct'), '制作一个 SVG 动画');
-  assert.throws(() => workspaces.assertRootMutationAllowed('direct', '/project', 'write', { file_path: 'direct.html' }), /ANIMATION_ROUTE_REQUIRED/);
-  assert.doesNotThrow(() => workspaces.assertRootMutationAllowed('direct', '/project', 'write', { file_path: 'notes.txt' }));
-  workspaces.beginRootTurn('direct', '不使用任何 skill，不进行任何验证');
-  assert.equal(workspaces.animationContext('direct'), '制作一个 SVG 动画');
-  assert.throws(() => workspaces.assertRootMutationAllowed('direct', '/project', 'write', { file_path: 'direct.html' }), /ANIMATION_ROUTE_REQUIRED/);
-  assert.throws(() => workspaces.assertSkillAllowed('direct'), /SKILL_DISABLED_BY_USER/);
-  workspaces.beginRootTurn('direct', '修改普通网页标题');
-  assert.equal(workspaces.animationContext('direct'), null);
-  assert.doesNotThrow(() => workspaces.assertRootMutationAllowed('direct', '/project', 'write', { file_path: 'direct.html' }));
-  assert.doesNotThrow(() => workspaces.assertSkillAllowed('direct'));
-  workspaces.protectRoot('root', 'scene.html');
-  workspaces.beginRootTurn('root', '制作 scene.html SVG 动画');
-  assert.throws(() => workspaces.assertRootMutationAllowed('root', '/project', 'write', { file_path: 'scene.html' }), /CONTROLLED_ANIMATION_PATH|ANIMATION_ROUTE_REQUIRED/);
-  assert.throws(() => workspaces.assertRootMutationAllowed('root', '/project', 'edit', { file_path: '/project/scene.html' }), /CONTROLLED_ANIMATION_PATH|ANIMATION_ROUTE_REQUIRED/);
-  assert.doesNotThrow(() => workspaces.assertRootMutationAllowed('root', '/project', 'read', { file_path: 'scene.html' }));
-  assert.throws(() => workspaces.assertRootMutationAllowed('root', '/project', 'write', { file_path: 'other.html' }), /ANIMATION_ROUTE_REQUIRED/);
-  workspaces.clearRootProtection('root');
-  assert.throws(() => workspaces.assertRootMutationAllowed('root', '/project', 'write', { file_path: 'scene.html' }), /ANIMATION_ROUTE_REQUIRED/);
+  const policy = toolPolicy(workspaces, []);
+  const call = name => policy({ name, agent: { session: { id: 'direct', header: {} } } });
+  assert.match(call('write'), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  assert.match(call('edit'), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  assert.equal(call('delivery_start'), undefined);
 });
 
 test('user skill prohibition applies to root and child sessions without disabling other tools', () => {
@@ -81,14 +90,9 @@ test('user skill prohibition applies to root and child sessions without disablin
 test('owner lifecycle reset clears every root-turn policy flag', () => {
   const workspaces = new WorkerWorkspaces({});
   workspaces.beginRootTurn('root', '不使用 Skill，创建 SVG 动画');
-  workspaces.protectRoot('root', 'scene.html');
   assert.throws(() => workspaces.assertSkillAllowed('root'), /SKILL_DISABLED/);
-  assert.throws(() => workspaces.assertRootMutationAllowed('root', '/project', 'write', { file_path: 'scene.html' }), /ANIMATION_ROUTE_REQUIRED/);
   workspaces.resetRootState('root');
   assert.doesNotThrow(() => workspaces.assertSkillAllowed('root'));
-  assert.doesNotThrow(() => workspaces.assertRootMutationAllowed('root', '/project', 'write', { file_path: 'scene.html' }));
-  assert.equal(workspaces.animationContext('root'), null);
-  assert.equal(workspaces.terminalDeliveryBlock('root'), null);
 });
 
 test('specialist tool-call budget is enforced before another tool executes', async () => {

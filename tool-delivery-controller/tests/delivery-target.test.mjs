@@ -42,7 +42,7 @@ test('multiple projects keep session cwd; outside, traversal, symlink and missin
   await symlink(resolve(f.cwd, 'a'), resolve(f.cwd, 'link'));
   await assert.rejects(resolveDeliveryTarget(f.cwd, contract, { projectRoot: 'link' }), /PATH_REJECTED/);
   await assert.rejects(resolveDeliveryTarget(f.cwd, contract, { projectRoot: 'missing' }), { code: 'ENOENT' });
-  assert.equal((await resolveDeliveryTarget(f.cwd, { ...contract, requiredPaths: [] }, { singleHtmlPath: 'out.html' })).workspace, f.cwd);
+  assert.equal((await resolveDeliveryTarget(f.cwd, { ...contract, layout: 'workspace', requiredPaths: [] }, { singleHtmlPath: 'out.html' })).workspace, f.cwd);
 });
 test('nested delivery implementation, review, status and sync share one destination; parent stays intact', async t => {
   const f = await fixture(t); const project = await f.project('demo1-candidate');

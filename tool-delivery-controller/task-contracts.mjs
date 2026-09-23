@@ -5,7 +5,7 @@ export const taskSchema = { type: 'array', maxItems: 10, items: { type: 'object'
   interfaces: { type: 'array', items: { type: 'string' }, maxItems: 20 },
   acceptanceCriteria: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
   editablePaths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
-  checkIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
+  checkIds: { type: 'array', items: { type: 'string' }, maxItems: 20 },
   dependsOn: { type: 'array', items: { type: 'string' }, maxItems: 10 },
 }, required: ['id', 'objective', 'context', 'interfaces', 'acceptanceCriteria', 'editablePaths', 'dependsOn'], additionalProperties: false } };
 export function validateTasks(tasks, contract) {
@@ -22,7 +22,7 @@ export function validateTasks(tasks, contract) {
       || typeof task.context !== 'string' || !task.context.trim() || task.context.length > 32000
       || !strings(task.interfaces) || !strings(task.acceptanceCriteria, 1) || !strings(task.editablePaths, 1)
       || !strings(task.dependsOn) || new Set(task.dependsOn).size !== task.dependsOn.length) throw new Error('Incomplete or duplicate task contract');
-    if (task.checkIds !== undefined && (!strings(task.checkIds, 1) || task.checkIds.some(id => !contract.checks.some(c => c.id === id)))) throw new Error('Task checks must come from the deployment contract');
+    if (task.checkIds !== undefined && (!strings(task.checkIds) || task.checkIds.some(id => !contract.checks.some(c => c.id === id)))) throw new Error('Task checks must come from the deployment contract');
     ids.add(task.id);
     for (const path of task.editablePaths) {
       safePath(path.replace(/\/$/, ''));

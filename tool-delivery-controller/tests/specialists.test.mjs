@@ -7,9 +7,18 @@ import { Specialists, validateReport } from '../specialists.mjs';
 import { capabilities, CapabilityControl } from '../capabilities.mjs';
 import { materialize } from '../files.mjs';
 import { SnapshotExplorer } from '../explore.mjs';
-const routes = ['kimi-k2-8-preview', 'kimi-k2.7-code', 'glm-5-3-flash', 'minimax-m3', 'doubao-seed-2-0-lite-260215', 'doubao-seed-2-0-lite-260215']
-  .map((model, i) => ({ toolName: ['task_kimi_research', 'task_kimi_quality', 'task_glm_vision', 'task_minimax_creative', 'task_doubao_media', 'task_doubao_animation'][i], provider: 'doubao', model, persona: 'test', description: 'test' }));
-const report = { status: 'passed', summary: 'complete content', evidence: ['checked input'], limitations: [] };
+const routes = ['minimax-m3', 'kimi-k2.7-code', 'glm-5-3-flash', 'doubao-seed-2-0-lite-260215']
+  .map((model, i) => ({ toolName: ['task_minimax_design', 'task_kimi_quality', 'task_glm_vision', 'task_doubao_media'][i], provider: 'doubao', model, persona: 'test', description: 'test', readOnly: true,
+    tools: i === 1 ? ['read', 'bash'] : i === 2 || i === 3 ? ['read', 'read_image'] : ['read', 'glob', 'grep'] }));
+const report = { status: 'passed', summary: 'complete content', evidence: ['checked input'], limitations: [], designPlan: {
+  goal: 'Deliver requested behavior', users: ['User'], scope: ['Requested change'], userFlows: ['Use feature'], implementation: ['Implement feature'],
+  acceptanceCriteria: ['Behavior works'], risks: ['Small scoped change'], assumptions: ['Existing project'], riskLevel: 'low' } };
+const wireDesignReport = value => ({ ...value,
+  evidence: Array.isArray(value.evidence) ? value.evidence.join('\n') : value.evidence,
+  limitations: Array.isArray(value.limitations) ? value.limitations.join('\n') : value.limitations,
+  ...(value.designPlan ? { designPlan: Object.fromEntries(Object.entries(value.designPlan)
+    .map(([key, section]) => [key, Array.isArray(section) ? section.join('\n') : section])) } : {}),
+});
 
 test('report evidence is role-aware: plans may be unverified while quality passes require evidence', () => {
   assert.deepEqual(validateReport({ ...report, evidence: [] }).evidence, []);
@@ -42,7 +51,8 @@ async function fixture(t, response = async () => report, recordTools = true) {
       const workspace = [...sessions].find(s => s.root === JSON.parse(request.prompt[0].text).workspace);
       if (recordTools) workspace.execution.push({ tool: 'read', ok: true }, { tool: 'read_image', path: 'logo.png', ok: true },
         { tool: 'bash', ok: true, commands: [{ command: 'node --test', exitCode: 0 }] });
-      return { id: `child-${requests.length}`, result: response(request).then(structured => ({ stopReason: 'completed', structured })),
+      return { id: `child-${requests.length}`, result: response(request).then(structured => ({ stopReason: 'completed',
+        structured: request.label === 'task_minimax_design' ? wireDesignReport(structured) : structured })),
         async dispose() { disposed++; } };
     } } };
   const workspaces = { bind(session, id) { session.child = id; }, async open(files) { const session = { root: await mkdtemp(resolve(stateDir, 'copy-')) }; await materialize(files, session.root); sessions.add(session); return session; }, async close(session) { sessions.delete(session); } };
@@ -53,7 +63,7 @@ async function fixture(t, response = async () => report, recordTools = true) {
   return { cwd, ctx, workspaces, specialists, definitions, requests, sessions, explorer, disposed: () => disposed };
 }
 
-test('all configured tools dispatch their models and persist complete reports; children can read/write but cannot delegate', async t => {
+test('all specialist tools dispatch their models and persist read-only reports', async t => {
   const f = await fixture(t);
   for (const route of routes) {
     const result = JSON.parse(await f.definitions.get(route.toolName).execute(Object.fromEntries(Object.entries(request(route)).filter(([k]) => k !== 'capability')), { ...exec(), agent: { session: { id: 'root', header: { cwd: f.cwd } } } }));
@@ -62,18 +72,26 @@ test('all configured tools dispatch their models and persist complete reports; c
     assert.equal((await f.specialists.control.artifact(result.artifactRef, 'root')).summary, report.summary);
   }
   assert.deepEqual(f.requests.map(r => r.agentOptions.model), routes.map(r => r.model));
-  assert.ok(f.requests.every(r => r.toolFilter.allow.includes('write') && r.toolFilter.allow.includes('edit') && !r.toolFilter.allow.some(n => n.startsWith('task_'))));
+  assert.ok(f.requests.every(r => !r.toolFilter.allow.includes('write') && !r.toolFilter.allow.includes('edit') && !r.toolFilter.allow.some(n => n.startsWith('task_'))));
   assert.equal(f.disposed(), routes.length); assert.equal(f.sessions.size, 0); assert.equal(f.explorer.sessions.size, 0);
 });
 
-test('read-only animation planner cannot receive mutation tools', async t => {
+test('read-only product designer cannot receive mutation tools', async t => {
   const f = await fixture(t);
-  const route = { ...routes[5], readOnly: true, tools: ['read', 'glob', 'grep', 'snapshot_explore', 'skill'] };
+  const route = { ...routes[0], readOnly: true, tools: ['read', 'glob', 'grep', 'snapshot_explore', 'skill'] };
   const args = { ...request(route), inputRefs: [] };
   await f.specialists.run(route, { parent: exec().agent, signal: exec().signal, objective: args.objective, files: {}, request: args });
-  assert.deepEqual(f.requests[0].toolFilter.allow, route.tools);
+  assert.deepEqual(f.requests[0].toolFilter.allow, ['skill']);
   const workspace = [...f.sessions][0];
   assert.equal(workspace, undefined);
+});
+
+test('product designer may inspect source only when the snapshot contains files', async t => {
+  const f = await fixture(t);
+  const route = { ...routes[0], tools: ['read', 'glob', 'grep', 'snapshot_explore', 'skill'] };
+  await f.specialists.execute(route, { parent: exec().agent, signal: exec().signal,
+    objective: 'Plan a source change', files: { 'input.txt': Buffer.from('source').toString('base64') } });
+  assert.deepEqual(f.requests[0].toolFilter.allow, route.tools);
 });
 
 test('per-route timeout and tool-call budget are passed to the isolated specialist workspace', async t => {
@@ -161,7 +179,7 @@ test('visual role allowlist removes shell without changing other roles', async t
   const f = await fixture(t);
   const route = { ...routes[2], tools: ['read', 'read_image', 'skill'] };
   await f.specialists.run(route, { parent: exec().agent, signal: exec().signal, objective: 'Inspect reference', files: { 'logo.png': Buffer.from('image').toString('base64') }, request: request(route, 'Inspect reference') });
-  assert.deepEqual(f.requests[0].toolFilter.allow, ['read', 'read_image', 'skill', 'write', 'edit']);
+  assert.deepEqual(f.requests[0].toolFilter.allow, ['read', 'read_image', 'skill']);
   await f.specialists.run(routes[1], { parent: exec().agent, signal: exec().signal, objective: 'Review', files: {} });
   assert.ok(f.requests[1].toolFilter.allow.includes('bash'));
 });
@@ -177,9 +195,23 @@ test('missing gap, unavailable capability and traversal are rejected before any 
   assert.equal(f.requests.length, 0);
 });
 
+test('native media is rejected before calling a text/image-only specialist', async t => {
+  const f = await fixture(t);
+  const args = { ...request(routes[3]), inputRefs: ['file:clip.mp4'] };
+  await assert.rejects(f.specialists.run(routes[3], { parent: exec().agent, signal: exec().signal,
+    objective: args.objective, files: { 'clip.mp4': Buffer.from('video').toString('base64') }, request: args }), /NATIVE_MEDIA_UNAVAILABLE/);
+  assert.equal(f.requests.length, 0);
+});
+
+test('a successful product designer report must include the structured plan', async t => {
+  const f = await fixture(t, async () => ({ status: 'passed', summary: 'Plan done', evidence: [], limitations: [] }));
+  const args = { ...request(routes[0]), inputRefs: [] };
+  await assert.rejects(f.specialists.run(routes[0], { parent: exec().agent, signal: exec().signal, objective: args.objective, files: {}, request: args }), /Invalid product design/);
+});
+
 test('model-declared passed cannot bypass real image delivery, source reading or review execution', async t => {
   const f = await fixture(t, async () => report, false);
-  for (const route of [routes[0], routes[1], routes[2]]) {
+  for (const route of [routes[3], routes[1], routes[2]]) {
     const args = request(route);
     const result = await f.specialists.run(route, { parent: exec().agent, signal: exec().signal, objective: args.objective,
       files: { 'logo.png': Buffer.from('image').toString('base64'), 'input.txt': Buffer.from('source').toString('base64') }, request: args });
@@ -261,4 +293,28 @@ test('automatic quality gate reuses only intact accepted evidence for the identi
   });
   await assert.rejects(f.specialists.execute(routes[1], { parent: exec().agent, signal: exec().signal,
     objective: 'Review', files: { 'input.txt': Buffer.from('source').toString('base64') } }), /QUALITY_INPUT_MODIFIED/);
+});
+
+test('automatic timed-out quality review retries once and reuses the accepted retry', async t => {
+  let attempts = 0;
+  const f = await fixture(t, async () => {
+    if (++attempts === 1) throw Object.assign(new Error('review timeout'), { code: 'WORKER_EXECUTION_TIMEOUT' });
+    return report;
+  });
+  const input = { parent: exec().agent, signal: exec().signal, scope: 'delivery', objective: 'Review', files: { 'src/a': Buffer.from('a').toString('base64') } };
+  await assert.rejects(f.specialists.run(routes[1], input), /review timeout/);
+  const second = await f.specialists.run(routes[1], input);
+  assert.equal(second.status, 'passed');
+  assert.equal((await f.specialists.run(routes[1], input)).id, second.id);
+  assert.equal(attempts, 2);
+});
+
+test('quality timeout retries cannot loop indefinitely', async t => {
+  let attempts = 0;
+  const f = await fixture(t, async () => { attempts++; throw Object.assign(new Error('review timeout'), { code: 'WORKER_EXECUTION_TIMEOUT' }); });
+  const input = { parent: exec().agent, signal: exec().signal, scope: 'delivery', objective: 'Review', files: {} };
+  await assert.rejects(f.specialists.run(routes[1], input), /review timeout/);
+  await assert.rejects(f.specialists.run(routes[1], input), /review timeout/);
+  await assert.rejects(f.specialists.run(routes[1], input), /RETRIES_EXHAUSTED/);
+  assert.equal(attempts, 2);
 });

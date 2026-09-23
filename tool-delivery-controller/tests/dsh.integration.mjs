@@ -5,23 +5,90 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { apply, dshWorker } from '../index.mjs';
-import { workerTools, rootFileTools } from '../workspace.mjs';
+import { apply, dshWorker, compactTerminalDelivery, workerPromptInput } from '../index.mjs';
+import { WorkerWorkspaces, workerTools, rootFileTools, registerHtmlChunkTool } from '../workspace.mjs';
+import { installToolPolicy } from '../tool-policy.mjs';
+import { completeHtmlDraft } from '../request-policy.mjs';
 import { SnapshotExplorer } from '../explore.mjs';
 import { Store } from '../store.mjs';
+import { productDesignWireSchema, normalizeProductDesignReport, validateProductDesign } from '../product-design.mjs';
+import { productDesignReportSchema } from '../specialists.mjs';
 
 const root = process.env.DSH_SOURCE;
 if (!root) throw new Error('Set DSH_SOURCE to a built deepseek-harness checkout');
 const require = createRequire(resolve(root, 'packages/core/tools/package.json'));
 const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')));
-const { createScope } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-scope')));
+const { createScope, bindScopeParent } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-scope')));
 const { default: SystemPrompt } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-system-prompt')));
 const { default: Tools } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-tools')));
+const { assertObjectJsonSchema, validateJsonSchemaValue } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-tools')));
 const validatingLlm = { async resolveCallConfig(options) {
   if (options.model === 'kimi-k2.7-code' && options.reasoningEffort !== undefined)
     throw new Error(`provider "${options.provider}" model "${options.model}" does not support reasoning effort "${options.reasoningEffort}"`);
   return { ...options };
 } };
+
+test('real DSH accepts flat MiniMax output and local normalization rejects malformed sections', () => {
+  const schema = productDesignReportSchema;
+  assert.doesNotThrow(() => assertObjectJsonSchema(schema));
+  const plan = { goal: 'Deliver a page', users: 'Visitor', scope: 'One HTML file', userFlows: 'Open page',
+    implementation: 'Build with Kimi', acceptanceCriteria: 'Page opens', risks: 'Minor',
+    assumptions: 'Modern browser', riskLevel: 'low' };
+  const report = { status: 'passed', summary: 'Ready', evidence: '', limitations: '', designPlan: plan };
+  assert.deepEqual(validateJsonSchemaValue(schema, report), []);
+  const normalized = normalizeProductDesignReport(report);
+  assert.doesNotThrow(() => validateProductDesign(normalized.designPlan));
+  for (const bad of [{ ...plan, goal: '' }, { ...plan, users: '' }, { ...plan, users: 'x'.repeat(4001) }]) {
+    assert.throws(() => normalizeProductDesignReport({ ...report, designPlan: bad }), /Invalid product design/);
+  }
+  assert.notDeepEqual(validateJsonSchemaValue(schema, { ...report, designPlan: { ...plan, users: [['nested']] } }), []);
+  assert.throws(() => assertObjectJsonSchema({ ...schema, properties: {
+    ...schema.properties, designPlan: { ...productDesignWireSchema, minLength: 1 },
+  } }), { code: 'UNSUPPORTED_SCHEMA' });
+});
+
+test('real DSH registry accepts sequential HTML chunks and refuses root or unfinished handoff', async t => {
+  const base = await mkdtemp(resolve(tmpdir(), 'html-chunks-dsh-'));
+  const ctx = new Context();
+  await ctx.plugin(SystemPrompt);
+  await ctx.plugin(Tools);
+  let scope;
+  const rootAgent = { session: { id: 'root', header: { cwd: base } } };
+  await ctx.plugin(Object.assign(inner => { scope = createScope(inner, rootAgent); }, { inject: ['tools', 'systemPrompt'] }));
+  const toolCtx = { tools: scope.ctx.tools, on: scope.ctx.on.bind(scope.ctx) };
+  const manager = new WorkerWorkspaces({});
+  const signal = new AbortController().signal;
+  const workspace = { base, root: base, parent: 'root', child: 'kimi', signal, closed: false,
+    tail: Promise.resolve(), execution: [], draftReady: Promise.withResolvers(),
+    expectedOutput: resolve(base, 'page.html'), allowedTools: ['html_chunk'] };
+  manager.sessions.add(workspace);
+  t.after(async () => { await manager.close(workspace); await scope.dispose(); await rm(base, { recursive: true, force: true }); });
+  installToolPolicy(toolCtx, manager, new Set());
+  registerHtmlChunkTool(toolCtx, manager);
+  const agent = { session: { id: 'kimi', header: { parentSession: 'root' } } };
+  bindScopeParent(agent, rootAgent);
+  const call = (callId, args, caller = agent) => scope.ctx.tools.execute({ agent: caller, name: 'html_chunk',
+    arguments: args, callId, signal });
+  const root = await call('root', { action: 'append', index: 0, content: 'bad' },
+    { session: { id: 'root', header: {} } });
+  assert.equal(root.isError, true);
+  const first = await call('first', { action: 'append', index: 0, content: '<!doctype html><html>' });
+  assert.notEqual(first.isError, true, JSON.stringify(first));
+  assert.equal(completeHtmlDraft(workspace, { type: 'tool/result', data: { message: {
+    source: { callId: 'first' }, content: first.content,
+  } } }), false);
+  const second = await call('second', { action: 'append', index: 1,
+    content: '<head></head><body><svg></svg></body></html>' });
+  assert.notEqual(second.isError, true, JSON.stringify(second));
+  const finish = await call('finish', { action: 'finish', index: 2 });
+  assert.notEqual(finish.isError, true, JSON.stringify(finish));
+  assert.equal(completeHtmlDraft(workspace, { type: 'tool/result', data: { message: {
+    source: { callId: 'finish' }, content: finish.content,
+  } } }), true);
+  assert.deepEqual(await workspace.draftReady.promise, { draft: true });
+  assert.match(await readFile(workspace.expectedOutput, 'utf8'), /<svg><\/svg>/);
+  assert.equal((await call('late', { action: 'append', index: 2, content: 'bad' })).isError, true);
+});
 
 test('real DSH tool registry denies global, scoped and newly registered bypass tools', async t => {
   const base = await mkdtemp(resolve(tmpdir(), 'delivery-dsh-'));
@@ -55,7 +122,8 @@ test('real DSH tool registry denies global, scoped and newly registered bypass t
   const assembly = await ctx.systemPrompt.assemble({ scope: agent });
   for (const name of ['bash', 'snapshot_explore', 'read_image'])
     assert.ok(!assembly.tools.some(tool => tool.name === name), `${name} must not be sent to root model`);
-  for (const name of rootFileTools) assert.ok(assembly.tools.some(tool => tool.name === name));
+  for (const name of rootFileTools.filter(name => !['write', 'edit'].includes(name))) assert.ok(assembly.tools.some(tool => tool.name === name));
+  for (const name of ['write', 'edit']) assert.ok(!assembly.tools.some(tool => tool.name === name));
   assert.ok(assembly.tools.some(tool => tool.name === 'delivery_start'));
   assert.ok(assembly.tools.some(tool => tool.name === 'delivery_cancel'));
 
@@ -108,6 +176,8 @@ test('worker adapter enforces schema, exploration allowlist and child disposal',
   assert.equal(request.maxDepth, 1);
   assert.equal(request.agentOptions.reasoningEffort, 'low');
   assert.equal(request.agentOptions.maxTokens, 32768);
+  assert.match(request.persona, /32768 token/);
+  assert.match(request.persona, /尽早提交可执行的小块/);
 });
 
 test('invalid worker model budgets are rejected before dispatch', () => {
@@ -126,6 +196,44 @@ test('worker output exhaustion is classified and disposes child and workspace', 
   assert.equal(disposed, 1);
   assert.equal(closed, 1);
   assert.equal(explorer.sessions.size, 0);
+});
+
+test('no-progress recovery dispatches the configured model through the same worker boundary', async () => {
+  const routes = [];
+  const explorer = new SnapshotExplorer();
+  const worker = dshWorker({ subagents: { async start(_provider, input) {
+    routes.push(input.agentOptions.model);
+    return { id: 'recovery-child', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Recovered' } }), async dispose() {} };
+  } } }, { modelProvider: 'doubao', model: 'kimi-k2-8-preview', recoveryWorker: {
+    provider: 'doubao', model: 'deepseek-v4-1-flash', reasoningEffort: 'off', maxTokens: 32768,
+  } }, explorer, { open: async () => ({ root: '/fixture', execution: [] }), bind() {}, close: async () => {},
+    proposal: async () => ({ changes: [] }) });
+  await worker({ parent: { session: { id: 'root' } }, files: {}, signal: new AbortController().signal,
+    phase: 'implement', recovery: { route: 'recovery-worker' } });
+  assert.deepEqual(routes, ['deepseek-v4-1-flash']);
+});
+
+test('terminal output exhaustion returns a compact root handoff without the repeated objective', () => {
+  const summary = compactTerminalDelivery({ id: 'delivery-1', state: 'failed', deliveryDirectory: '/project',
+    reason: 'Worker output token budget exhausted', reasonCode: 'WORKER_MAX_TOKENS', workerCalls: 1,
+    objective: 'large objective '.repeat(10000), taskIR: { goal: 'duplicate large objective' } });
+  assert.deepEqual(summary, { id: 'delivery-1', state: 'failed', deliveryDirectory: '/project',
+    reason: 'Worker output token budget exhausted', reasonCode: 'WORKER_MAX_TOKENS', workerCalls: 1,
+    nextAction: 'report_failure_and_wait_for_new_user_request' });
+  assert.equal(compactTerminalDelivery({ ...summary, reasonCode: 'WORKER_TIMEOUT_RETRIES_EXHAUSTED' })?.nextAction,
+    'report_failure_and_wait_for_new_user_request');
+  assert.equal(compactTerminalDelivery({ state: 'passed' }), null);
+});
+
+test('single HTML prompt excludes executable checks and designer-invented acceptance criteria', () => {
+  const prompt = workerPromptInput({ objective: 'Create SVG page',
+    productDesign: { plan: { goal: 'SVG page', scope: ['One HTML'], userFlows: ['Open it'],
+      implementation: ['Draw a scene'], risks: ['Small visual risk'], acceptanceCriteria: ['Invented fixed pivot'] } },
+    taskIR: { constraints: ['Inline SVG'], acceptanceCriteria: ['It opens'], availableChecks: [{ argv: ['node', '-e', 'private checker source'] }] } },
+  { requiredOutputs: ['page.html'], checks: [{ id: 'single-html', argv: ['node', '-e', 'private checker source'] }] }, '/workspace', true);
+  assert.equal(prompt.target, 'page.html');
+  assert.deepEqual(prompt.constraints, ['Inline SVG']);
+  assert.doesNotMatch(JSON.stringify(prompt), /private checker source|Invented fixed pivot|availableChecks/);
 });
 
 test('real tool entry selects single HTML contract and synchronizes a fixture worker output', async t => {
@@ -150,8 +258,9 @@ test('real tool entry selects single HTML contract and synchronizes a fixture wo
       await new Promise(resolve => setTimeout(resolve, 1100));
       assert.ok(progressEvents.some(e => e.type === 'todo/write' && e.data.todos.some(t => t.content.includes('实现中'))), 'progress must reach root while worker is still running');
       const payload = JSON.parse(input.prompt[0].text);
-      assert.deepEqual(payload.contract.editablePaths, ['pelican-bicycle.html']);
-      await writeFile(resolve(payload.workspace, 'pelican-bicycle.html'), html);
+      assert.equal(payload.target, 'pelican-bicycle.html');
+      assert.doesNotMatch(JSON.stringify(payload), /"argv"/);
+      await writeFile(resolve(payload.workspace, payload.target), html);
       return { id: 'html-worker', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Fixture HTML' } }), async dispose() {} };
     } },
   }, { stateDir: resolve(base, 'state'), contractPath,
@@ -176,19 +285,19 @@ test('real tool entry selects single HTML contract and synchronizes a fixture wo
 test('single HTML worker hands off on a successful write without another model completion', async () => {
   const workspace={root:'/fixture',execution:[],tokenUsage:[]};let disposed=false,closed=false;
   const worker=dshWorker({subagents:{async start(_provider,input){
-    assert.deepEqual(input.toolFilter.allow,['read','write']);
-    assert.equal(input.agentOptions.reasoningEffort,undefined);
+    assert.deepEqual(input.toolFilter.allow,['read','write','html_chunk']);
+    assert.equal(input.agentOptions.reasoningEffort,'low');
     queueMicrotask(()=>workspace.draftReady.resolve({draft:true}));
     return {id:'child',result:new Promise(()=>{}),async dispose(){disposed=true;}};
   }}},{reasoningEffort:'low'}, {open:()=>({token:'fixture'}),close(){}}, {
     open:async()=>workspace,bind(){},close:async()=>{closed=true;},proposal:async(_w,_f,summary)=>({summary,changes:[{path:'p.html',operation:'write',content:'draft'}]}),
   });
   const result=await worker({parent:{session:{id:'parent'}},signal:new AbortController().signal,files:{},contract:{editablePaths:['p.html'],requiredOutputs:['p.html'],checks:[{id:'single-html'}]}});
-  assert.ok(disposed && closed);assert.match(result.summary,/verification and independent review are still required/);
+  assert.ok(disposed && closed);assert.match(result.summary,/local verification and synchronization are still required/);
   assert.equal(result.changes.length,1);
 });
 
-test('animation HTML enforces Doubao plan before Kimi implementation and hands the accepted plan to code', async t => {
+test('real HTML entry enforces MiniMax design then Kimi K2.8 implementation and preserves optional review', async t => {
   const base = await mkdtemp(resolve(tmpdir(), 'delivery-animation-dsh-'));
   const workspace = resolve(base, 'project'); await mkdir(workspace);
   const contractPath = resolve(base, 'contract.json');
@@ -202,34 +311,43 @@ test('animation HTML enforces Doubao plan before Kimi implementation and hands t
   await apply({ tools: scope.ctx.tools, llm: validatingLlm, on: scope.ctx.on.bind(scope.ctx), commands: { register() {} },
     subagents: { async start(_provider, input) {
       calls.push(input.label);
-      if (input.label === 'task_doubao_animation') {
-        assert.deepEqual(input.toolFilter.allow, ['read', 'glob', 'grep', 'snapshot_explore', 'skill']);
-        return { id: 'doubao-plan', result: Promise.resolve({ stopReason: 'completed', structured: {
-          status: 'passed', summary: '0-2 秒建立画面，2-5 秒主体动作，5-6 秒回到首帧循环；实现器使用 SVG 分层与 ease-in-out。',
-          evidence: ['方案包含画面、动作、时间轴、分镜、循环和实现参数'], limitations: ['不生成视频'] } }), async dispose() {} };
+      if (input.label === 'task_kimi_quality') throw Object.assign(new Error('Fixture upstream timeout'), { code: 'WORKER_EXECUTION_TIMEOUT' });
+      if (input.label === 'task_minimax_design') {
+        assert.equal(input.agentOptions.model, 'minimax-m3');
+        assert.ok(!input.toolFilter.allow.includes('write'));
+        return { id: 'minimax-design', result: Promise.resolve({ stopReason: 'completed', structured: {
+          status: 'passed', summary: 'Plan a self-contained SVG animation', evidence: '', limitations: '',
+          designPlan: { goal: 'SVG animation', users: 'Viewer', scope: 'One HTML file', userFlows: 'Open page and view loop',
+            implementation: 'Use inline SVG and CSS', acceptanceCriteria: 'Animation loops', risks: 'Local presentation only', assumptions: 'No dependencies', riskLevel: 'low' },
+        } }), async dispose() {} };
       }
       assert.equal(input.label, 'Delivery implement');
-      assert.equal(input.agentOptions.model, 'kimi-k2.7-code');
+      assert.equal(input.agentOptions.model, 'kimi-k2-8-preview');
       assert.equal(Object.hasOwn(input.agentOptions, 'reasoningEffort'), false);
+      assert.match(input.persona, /每次模型调用的输出硬上限为 16384 token/);
       const payload = JSON.parse(input.prompt[0].text);
-      assert.equal(payload.upstreamReports.length, 1);
-      assert.equal(payload.upstreamReports[0].capability, 'animation_planning');
-      await writeFile(resolve(payload.workspace, payload.contract.requiredOutputs[0]), '<!doctype html><html><head></head><body><svg><circle cx="20" cy="20" r="10"/></svg></body></html>');
+      assert.match(payload.objective, /制作一个.*SVG 动画/);
+      assert.ok(['scene.html', 'unverified-scene.html'].includes(payload.target));
+      assert.equal(payload.designGuidance.goal, 'SVG animation');
+      assert.doesNotMatch(JSON.stringify(payload), /Animation loops|single-html/);
+      await writeFile(resolve(payload.workspace, payload.target), '<!doctype html><html><head></head><body><svg><circle cx="20" cy="20" r="10"/></svg></body></html>');
       return { id: 'kimi-implementation', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Implemented the accepted storyboard.' } }), async dispose() {} };
     } },
   }, { stateDir: resolve(base, 'state'), contractPath, runtimePackageJson: '/Applications/DSH Desktop.app/Contents/Resources/app/package.json',
-    modelProvider: 'doubao', model: 'kimi-k2.7-code', animationPlanTool: 'task_doubao_animation',
-    specialists: [{ toolName: 'task_doubao_animation', provider: 'doubao', model: 'doubao-seed-2-0-lite-260215', readOnly: true,
-      tools: ['read', 'glob', 'grep', 'snapshot_explore', 'skill'], persona: 'Create an animation plan only.' }],
+    modelProvider: 'doubao', model: 'kimi-k2-8-preview', maxTokens: 16384,
+    qualityTool: 'task_kimi_quality', designTool: 'task_minimax_design', reviewPolicy: 'risk_based',
+    specialists: [{ toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2.7-code', readOnly: true, tools: ['read'], persona: 'Read-only code review.' }, { toolName: 'task_minimax_design', provider: 'doubao', model: 'minimax-m3', readOnly: true,
+      tools: ['read', 'glob', 'grep', 'snapshot_explore', 'skill'], persona: 'Create a product design.' }],
     sandbox: { nodeExecutable: '/Applications/DSH Desktop.app/Contents/Resources/app/node_modules/node/bin/node', backend: 'seatbelt' } });
   const result = await ctx.tools.execute({ agent, name: 'delivery_start', arguments: {
     objective: '制作一个循环 SVG 动画，明确动作节奏和分镜', singleHtmlPath: 'scene.html' }, callId: 'animation-start', signal: new AbortController().signal });
   assert.notEqual(result.isError, true, JSON.stringify(result));
   const run = JSON.parse(result.content[0].text);
   assert.equal(run.state, 'passed', run.reason);
-  assert.deepEqual(calls, ['task_doubao_animation', 'Delivery implement']);
-  assert.equal(run.capabilityTasks[0].capability, 'animation_planning');
-  assert.equal(run.capabilityTasks[0].state, 'accepted');
+  assert.deepEqual(calls, ['task_minimax_design', 'Delivery implement']);
+  assert.equal(run.capabilityTasks[0].capability, 'product_design');
+  assert.equal(run.productDesign.plan.goal, 'SVG animation');
+  assert.ok(run.acceptance.every(item => item.source !== 'product_design'));
   assert.match(await readFile(resolve(workspace, 'scene.html'), 'utf8'), /<svg>/);
 
   const unverifiedResult = await ctx.tools.execute({ agent, name: 'delivery_start', arguments: {
@@ -243,10 +361,22 @@ test('animation HTML enforces Doubao plan before Kimi implementation and hands t
   assert.equal(unverified.qualityGate, null);
   assert.equal(unverified.syncReceipt.verified, false);
   assert.equal(unverified.syncReceipt.assurance, 'unverified');
-  assert.deepEqual(calls, ['task_doubao_animation', 'Delivery implement', 'task_doubao_animation', 'Delivery implement']);
+  assert.deepEqual(calls, ['task_minimax_design', 'Delivery implement', 'task_minimax_design', 'Delivery implement']);
   assert.match(await readFile(resolve(workspace, 'unverified-scene.html'), 'utf8'), /<svg>/);
 
-  // A blocked project must be rejected before another paid animation plan is dispatched.
+  assert.equal(run.verification.independentReview, 'not_requested');
+  assert.equal(run.verification.reviewPolicy, 'risk_based');
+  const reviewed = await ctx.tools.execute({ agent, name: 'delivery_review', arguments: { id: run.id },
+    callId: 'review-timeout', signal: new AbortController().signal });
+  assert.notEqual(reviewed.isError, true, JSON.stringify(reviewed));
+  const reviewResult = JSON.parse(reviewed.content[0].text);
+  assert.equal(reviewResult.state, 'passed');
+  assert.equal(reviewResult.review.status, 'incomplete');
+  assert.equal(reviewResult.review.reasonCode, 'REVIEW_TIMEOUT');
+  assert.deepEqual(reviewResult.syncReceipt, run.syncReceipt);
+  assert.match(await readFile(resolve(workspace, 'scene.html'), 'utf8'), /<svg>/);
+
+  // A blocked project must be rejected before another implementation is dispatched.
   const blockerStore = new Store(resolve(base, 'state'));
   blockerStore.create({ owner: agent.session.id, workspace: await realpath(workspace), objective: 'blocked fixture', contract: {}, files: {}, mode: 'project' });
   blockerStore.close();
@@ -257,9 +387,10 @@ test('animation HTML enforces Doubao plan before Kimi implementation and hands t
   assert.match(JSON.stringify(duplicate), /unfinished delivery/);
   assert.equal(calls.length, callCount);
 
-  const bypass = await ctx.tools.execute({ agent, name: 'write', arguments: { file_path: 'scene.html', content: 'bypass' }, callId: 'bypass', signal: new AbortController().signal });
-  assert.equal(bypass.isError, true);
-  assert.match(JSON.stringify(bypass), /CONTROLLED_ANIMATION_PATH|ANIMATION_ROUTE_REQUIRED/);
+  const direct = await ctx.tools.execute({ agent, name: 'write', arguments: { file_path: 'direct-animation.html', content: '<svg></svg>' }, callId: 'direct', signal: new AbortController().signal });
+  assert.equal(direct.isError, true, JSON.stringify(direct));
+  assert.match(JSON.stringify(direct), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  await assert.rejects(readFile(resolve(workspace, 'direct-animation.html')), /ENOENT/);
 });
 
 test('general native tool entry keeps session paths and binds explicit subdirectory delivery', async t => {
@@ -287,29 +418,42 @@ test('general native tool entry keeps session paths and binds explicit subdirect
   const call = (name, args) => ctx.tools.execute({ agent, name, arguments: args, callId: `general-${calls}`, signal: new AbortController().signal });
   const context = await call('delivery_context', {});
   assert.notEqual(context.isError, true); assert.equal(JSON.parse(context.content[0].text).deliveryDirectory, workspace);
+  const taskContext = { constraints: { runtime: 'Node 18+', externalDependencies: false }, protectedPaths: ['tests/**'], acceptanceCriteria: ['public-tests'] };
+  const requestedTasks = [{ id: 'write-child', objective: 'Create child file', context: 'Keep tests unchanged', interfaces: [], acceptanceCriteria: ['Create child.txt'], editablePaths: ['child.txt'], dependsOn: [], checkIds: ['public-tests'] }];
+  const preview = await call('delivery_context', { projectRoot: 'candidate', objective: 'Create a text file', context: taskContext, tasks: requestedTasks });
+  assert.notEqual(preview.isError, true, JSON.stringify(preview));
+  assert.deepEqual(JSON.parse(preview.content[0].text).checkIds, []);
+  assert.ok(JSON.parse(preview.content[0].text).taskIR.validation.some(v => v.requestedCheckId === 'public-tests'));
   for (const projectRoot of [undefined, 'candidate']) {
-    const value = await call('delivery_start', { objective: 'Create a text file', ...(projectRoot ? { projectRoot } : {}) });
+    const value = await call('delivery_start', { objective: 'Create a text file', ...(projectRoot ? { projectRoot, context: taskContext, tasks: requestedTasks } : {}) });
     assert.notEqual(value.isError, true, JSON.stringify(value));
     const run = JSON.parse(value.content[0].text); assert.equal(run.state, 'passed', run.reason);
     assert.equal(run.verification.automatedChecks, 'not_configured');
+    if (projectRoot) {
+      assert.deepEqual(run.taskIR, JSON.parse(preview.content[0].text).taskIR);
+      assert.deepEqual(run.tasks[0].checkIds, []);
+      assert.equal(run.acceptanceComplete, false);
+      assert.equal(run.nextAction, 'root_acceptance_required');
+    }
     assert.equal(run.deliveryDirectory, projectRoot ? resolve(workspace, projectRoot) : workspace);
   }
   assert.equal(await readFile(resolve(workspace, 'candidate/parent-relative.txt'), 'utf8'), 'delivered');
   assert.equal(await readFile(resolve(workspace, 'candidate/child.txt'), 'utf8'), 'delivered');
   await assert.rejects(readFile(resolve(workspace, 'child.txt')), { code: 'ENOENT' });
   assert.equal((await call('delivery_start', { objective: 'Bad path', projectRoot: '../outside' })).isError, true);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
-test('HTML adapter uses only caller deadline and disposes timed-out attempts before returning', async () => {
+test('HTML adapter preserves caller cancellation with a separate first-tool deadline', async () => {
   const signal = AbortSignal.timeout(15);
   const explorer = new SnapshotExplorer(); let disposed = 0, closed = 0;
   const worker = dshWorker({ subagents: { async start(_provider, input) {
-    assert.equal(input.signal, signal, 'no extra first-write deadline may replace the controller signal');
+    assert.notEqual(input.signal, signal);
+    assert.equal(input.signal.aborted, false);
     return { id: 'timeout-child', result: new Promise((_, reject) => {
       input.signal.addEventListener('abort', () => reject(input.signal.reason), { once: true });
     }), async dispose() { disposed++; } };
-  } } }, { singleHtmlFirstWriteTimeoutMs: 1 }, explorer, {
+  } } }, { firstToolTimeoutMs: 30000 }, explorer, {
     async open() { return { root: '/fixture', execution: [] }; }, bind() {}, async close() { closed++; },
   });
   const keepAlive = setInterval(() => {}, 50);

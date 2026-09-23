@@ -1,5 +1,23 @@
 import { safePath, validateContract, matches } from './files.mjs';
 
+// Flag gross structural loss when updating an existing single-file page. This
+// is deliberately a conservative truncation guard, not a semantic validator:
+// a large rewrite can still be valid, but it must not silently pass as a small
+// repair after most drawable nodes and named parts disappear together.
+export function htmlStructureRegression(before, after) {
+  if (typeof before !== 'string' || typeof after !== 'string') return null;
+  const tags = source => [...source.matchAll(/<(?:svg|g|path|rect|circle|ellipse|line|polyline|polygon|text|use|button|div|span)\b/gi)].length;
+  const classes = source => new Set([...source.matchAll(/\bclass\s*=\s*["']([^"']+)["']/gi)]
+    .flatMap(match => match[1].split(/\s+/).filter(Boolean)));
+  const priorTags = tags(before), nextTags = tags(after);
+  const priorClasses = classes(before), nextClasses = classes(after);
+  if (priorTags < 60 || priorClasses.size < 8) return null;
+  const retained = [...priorClasses].filter(name => nextClasses.has(name));
+  if (nextTags >= priorTags * 0.6 || retained.length >= priorClasses.size * 0.6) return null;
+  return { priorTags, nextTags, priorClasses: priorClasses.size, retainedClasses: retained.length,
+    missingClasses: [...priorClasses].filter(name => !nextClasses.has(name)).slice(0, 20) };
+}
+
 // Deployment-owned check code; the model supplies only one exact output path.
 // Run in the normal verification sandbox, never execute the page's scripts.
 function checkHtml(path) {
@@ -7,10 +25,22 @@ function checkHtml(path) {
   const { Script } = require('node:vm');
   const assert = require('node:assert/strict');
   const html = fs.readFileSync(path, 'utf8');
-  assert.ok(/<!doctype\s+html\s*>/i.test(html), 'Missing HTML doctype');
+  const count = pattern => [...html.matchAll(pattern)].length;
+  assert.equal(count(/<!doctype\s+html\s*>/gi), 1, 'Exactly one HTML doctype is required');
+  assert.match(html, /^\s*<!doctype\s+html\s*>/i, 'HTML doctype must come first');
   for (const tag of ['html', 'head', 'body']) {
-    assert.ok(new RegExp(`<${tag}(?:\\s[^>]*)?>[\\s\\S]*<\\/${tag}\\s*>`, 'i').test(html), `Missing ${tag} document element`);
+    assert.equal(count(new RegExp(`<${tag}\\b[^>]*>`, 'gi')), 1, `Exactly one opening ${tag} tag is required`);
+    assert.equal(count(new RegExp(`</${tag}\\s*>`, 'gi')), 1, `Exactly one closing ${tag} tag is required`);
   }
+  const open = tag => new RegExp(`<${tag}\\b[^>]*>`, 'i').exec(html).index;
+  const close = tag => new RegExp(`</${tag}\\s*>`, 'i').exec(html).index;
+  assert.ok(open('html') < open('head') && open('head') < close('head')
+    && close('head') < open('body') && open('body') < close('body')
+    && close('body') < close('html'), 'HTML document sections are out of order');
+  assert.match(html.slice(close('html')), /^<\/html\s*>\s*$/i, 'Content follows the closing HTML tag');
+  assert.equal(count(/<svg\b/gi), count(/<\/svg\s*>/gi), 'SVG opening and closing tags must balance');
+  assert.ok(!/<(?:script|link|img|source|video|audio|iframe|image|use)\b[^>]*(?:src|href|xlink:href)\s*=\s*["']?https?:\/\//i.test(html)
+    && !/@import\b|url\(\s*["']?https?:\/\//i.test(html), 'External resources are not allowed in a self-contained HTML file');
   for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
     assert.ok(!/\bsrc\s*=/i.test(match[1]), 'Single HTML must inline scripts');
     const type = /\btype\s*=\s*["']([^"']*)["']/i.exec(match[1])?.[1]?.toLowerCase();

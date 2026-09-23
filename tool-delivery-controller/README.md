@@ -1,8 +1,54 @@
-# 拼好模固定交付控制器
+# 产品设计、实现与独立验收（当前默认）
 
-交付开始后，控制器直接通过宿主原生 `todo/write` 事件更新 Todo 面板：准备输入、实现/修复、合同检查、独立审查、同步复核。已登记 `tasks` 时逐项显示实际目标及执行状态。没有登记业务子任务时仅展示执行阶段，不假称已自动完成业务拆分。状态每秒检查一次，等待期间耗时每 15 秒更新，不追加模型上下文，不增加模型调用。失败、阻塞和取消显示原因且不标记完成；交付结束清理计时器。首个工具调用之前的模型推理不在控制器可观测范围内。
+当前 preset 配置 `designTool: task_minimax_design`、`reviewPolicy: risk_based`。流程为 DeepSeek 需求编排 → MiniMax 产品设计 → Kimi K2.8 优先实现 → 本地检查 → 高风险任务 Kimi K2.7 独立验收 → 同步与复核。连续无有效写入并耗尽有界恢复时，控制器可调用一次配置的 DeepSeek 恢复 Worker。低/中风险不自动加入独立模型验收。没有配置本地检查时 `automatedChecks=not_configured`，不得宣称运行了测试。
 
-Worker 的 `max-tokens` 属于本次生成失败，不能当作可恢复环境故障反复调用同一模型。新任务记为 `failed`；旧版保存的同类 `blocked` 任务在恢复时转为失败，不再重试。之后应缩小目标或调整模型输出预算再新建任务。本规则不改变普通测试失败的有界修复，也不改变沙箱暂不可用等环境阻塞的恢复。
+单 HTML 实现支持 `html_chunk(action=append,index,content)` 分批写入隔离草稿，每块 1..8192 UTF-8 字节，最多 128 块、512 KiB；序号必须连续。`html_chunk(action=finish,index=下一块序号)` 成功回执后才接管草稿，运行原有检查和同步。根 Agent 与其他专家不能调用；模型在首块之前耗尽输出预算时仍按 `WORKER_MAX_TOKENS` 失败，未完成草稿不作为交付物。
+
+产品设计是控制器的 design/designing 阶段，输出包含目标、用户、范围、用户流程、实施方案、验收标准、风险和假设。方案通过结构、模型身份和输入快照校验后持久化；Store 拒绝跳过设计直接实现。一般设计失败阻塞，显式恢复最多重试一次；DSH 报 `UNSUPPORTED_SCHEMA` 时直接失败，避免重复同一配置错误。取消、重启保留状态与预算。子任务继承父方案，修复不重复规划；实现与验收都收到同一方案。报告完整性失败会阻断实现。方案文本不成为 Shell 命令、修改权限或强制验收项；仅用户任务合同及部署合同中的验收项进入状态清单。风险等级为模型判断，程序只保证 high 必须经过验收，不保证模型能识别所有风险。
+
+所有模型角色由本 preset 固定：根请求钩子只路由 DeepSeek 总 Agent；Kimi K2.8 是首选实现模型，DeepSeek 恢复 Worker 仅在前者无有效写入并耗尽有界尝试后运行一次；MiniMax/GLM/豆包均只读，只有 Kimi K2.7 验收者可在只读工作区运行检查。Seedream 图片生成、Seedance 视频生成、豆包原生音视频输入在能力查询中显式 unavailable，不能通过其他模型伪装完成。
+
+`delivery_review({id})` 仅接受当前会话已经完成的交付，审查已交付的不可变快照，并提供本次变更路径。审查报告独立持久化于事件表，不修改交付状态或文件，不触发实现与修复。`verification.independentReview` 初始为 `not_requested`；超时、取消、不可用或无效报告为 `incomplete`，原因由 `review.reasonCode` 给出。完整报告可通过 `artifactRef` 追溯。项目后来有变更时 `projectMatchesReceipt=false`，旧快照审查不代表当前项目。
+
+`required` 仍可作为部署策略使用，历史任务保留创建时的门禁，不自动降低已有任务的保证。策略与路由不可通过状态更新修改。以下旧版门禁流程仅适用于 required 策略。
+
+## Task IR 与 Contract Compiler（架构调整 P0）
+
+`delivery_context` 和 `delivery_start` 共用 `task-ir.mjs` 的编译入口。前者只预览，后者在真实工作目录解析后重新编译，再登记任务和调用 Worker。可选 `context` 描述约束、路径、公开接口、验收条件和交付物；`objective` 成为统一 `goal`。`steps`、执行者选择、模型与工具注册、检查命令等字段不能通过 context 注入。根模型仍通过现有工具决定是否自行完成、委派和组织依赖。
+
+```json
+{
+  "objective": "修复订单优惠与退款计算",
+  "context": {
+    "constraints": { "runtime": "Node 18+", "module": "CommonJS", "externalDependencies": false },
+    "editablePaths": ["src/**"],
+    "protectedPaths": ["tests/**", "docs/**"],
+    "requiredInterfaces": ["quote", "createRefundState", "refund"],
+    "acceptanceCriteria": ["public-tests", "退款必须幂等"],
+    "deliverables": ["修复后的退款实现"]
+  }
+}
+```
+
+路径以所选 `projectRoot` 为根。支持精确路径、目录前缀、`**` 和尾部 `/**`；其他 glob 拒绝。context 只能收紧部署的可编辑范围、增加保护路径，不能放宽边界。编译后的路径约束进入实际变更校验与同步流程。
+
+部署文件仍独占可执行 `checks` 的定义；编译结果补齐绝对 `projectRoot`、`checkIds` 和配置能力信息。验收字符串与已注册 check ID 完全一致时绑定该检查。Task 请求未注册的合法 ID 时，编译器移除其执行引用，保留 `requestedCheckId`、原因和文本验收项，不猜测或执行 `npm test` 等命令。当前没有开放临时检查创建权限。任务 `checkIds: []` 表示子任务无选定检查；父交付依然执行部署契约的全部检查。
+
+统一 `taskIR` 持久化到 run 并写入 `contract.compiled` 审计事件，随 Worker 的实现与修复输入传递，状态更新不能篡改它。`delivery_status` 的 `acceptance` 逐项返回 `passed`、`failed` 或 `not_verified`，只有当前快照的真实检查结果可标记通过。文本验收不会因模型自述或同步成功变成通过；存在未验证项时，即使文件交付状态是 `passed`，也返回 `acceptanceComplete=false` 和 `nextAction=root_acceptance_required`。没有验收条目时 `acceptanceComplete=null`，不作语义完成保证。
+
+本阶段没有实现自然语言语义验证：`constraints`、接口和交付物描述保留为未验证文本；P2 再引入专用可执行断言。P1 的完整 Decision Trace、统一异构 TaskNode，以及 P2 的动态重规划和完整 Capability Registry 尚未实施。已有专业 DAG、Worker 任务调度、审查选择和恢复机制继续保留，不能将本次 P0 记录称为完整架构重构完成。
+
+验收记录见 [Task IR P0 验证](validation/task-ir-p0-20260922.md)。修改源码不保证已运行会话热重载；新会话或重新加载 preset 后使用新入口。
+
+# 拼好模交付 Runtime
+
+交付开始后，控制器直接通过宿主原生 `todo/write` 事件更新 Todo 面板：准备输入、实现/修复、合同检查、同步复核（required 策略另含独立审查）。已登记 `tasks` 时逐项显示实际目标及执行状态。没有登记业务子任务时仅展示执行阶段，不假称已自动完成业务拆分。状态每秒检查一次，等待期间耗时每 15 秒更新，不追加模型上下文，不增加模型调用。失败、阻塞和取消显示原因且不标记完成；交付结束清理计时器。首个工具调用之前的模型推理不在控制器可观测范围内。
+
+Worker 的 `max-tokens` 属于本次生成失败。仅当隔离工作副本未被修改时，控制器在原交付内有界重试一次；仍无进展时可使用一次已配置恢复 Worker。已有写入或预算耗尽则终止，不重复不安全的草稿。本规则不改变普通测试失败的有界修复，也不改变沙箱暂不可用等环境阻塞的恢复。
+
+实现优先使用 Kimi K2.8 Preview。单 HTML 改变工具范围和验收合同；若首选 Worker 的有界尝试均未产生有效写入，控制器可派发一次 `recoveryWorker`，沿用相同工作副本、写入范围和检查。旧的 singleHtmlWorker/workerFallback/singleHtmlReasoningEffort 配置仍被拒绝；根模型 write/edit 在工具策略与执行入口均拒绝。输出超限或无工具恢复耗尽时返回精简失败状态，并在本轮隐藏 delivery_start，保留只读查询；下一条真实用户消息解除启动限制。
+
+更新已有单 HTML 时，若可绘制/交互元素与具名 CSS 类同时大幅减少，控制器将 `single-html` 检查标记为 `HTML_STRUCTURE_REGRESSION` 并进入修复或失败，不允许静默同步。这是通用的严重截断防线，不是视觉或语义正确性的证明；合法的大规模重写也可能被保守拦下，需要调整交付范围或另行验收。
 
 根 Agent 可调用 `delivery_cancel({id})` 结束本会话的交付，无需让用户手输命令。活动任务先停止并等待清理；重复取消终态任务返回现有状态。取消不删除项目文件，不撤销已同步修改，不能取消其他会话或独立取消必需子任务。新建交付时，在工作区锁内自动将本会话同工作区旧版 `Worker did not complete: max-tokens` 阻塞记录转为失败，保留历史，允许替代交付；真实环境故障、冲突与其他会话记录不会被自动解除。
 
@@ -14,11 +60,11 @@ Worker 的 `max-tokens` 属于本次生成失败，不能当作可恢复环境�
 
 ## 受控按需协助（当前实现）
 
-默认直接完成单模型可处理的工作；简单 bug 仍直接 `delivery_start`，不创建规划 Agent。实现后的固定合同检查与 Kimi 独立质量门禁保留，不属于临时能力申请。
+根助手负责专业分工和结果整合。文件交付统一先产品设计，再进入实现；小任务的方案保持简短。高风险使用 risk_based 验收门禁，额外交付后审查通过 delivery_review 发起。
 
-- `request_capability` 提交能力、目标、理由、单模型能力缺口、输入引用、预期产物与验收条件。能力定义与工具描述来自 `capabilities.mjs`，实际模型由 YAML 映射。Skill 只提供方法说明。
+- `request_capability` 提交能力、目标、理由、专业协作相对单模型执行的价值、输入引用、预期产物与验收条件。这个价值可以是能力缺口、更好的领域匹配、独立视角或并行提速。能力定义与工具描述来自 `capabilities.mjs`，实际模型由 YAML 映射。
 - 原 `task_*` 为同一受控入口的兼容名称，参数除隐含 capability 外完全相同；不能绕过合同或预算。DAG 节点也必须提交理由和交付约定，不再接受只有 objective 的旧参数。
-- 根助手可申请已注册能力；实现 Worker 只能申请辅助研究、创意、视觉、媒体分析，不能申请或替代质量门禁。专业节点、质量节点不能继续委派。辅助子 Agent 由控制器以根 Agent 身份启动为兄弟节点，调用者身份、工作区、交付 ID 由运行时绑定，模型不能指定。
+- 根助手可申请已注册能力；实现 Worker 只能申请辅助研究、创意、视觉、媒体分析，不能自行触发独立审查。专业节点和审查节点不能继续委派。辅助子 Agent 由控制器以根 Agent 身份启动为兄弟节点，调用者身份、工作区、交付 ID 由运行时绑定，模型不能指定。
 - 输入仅接受 `file:相对路径` 与已验收的 `report:任务ID`。报告绑定会话身份并校验文件哈希；篡改或删除后失效。`delivery_start.reportRefs` 自动加载完整报告，修复轮自动恢复本交付已接受的辅助报告，缺失、失败或未完成的必需辅助任务会阻止交付通过。
 - 请求记录进入独立 `capabilities.sqlite`。状态为 running → submitted → validating → accepted / failed / blocked；取消为 cancelled，已验收报告被修改为 invalidated。模型只能提交 status，最终状态由控制器设置。
 - 控制器检查报告结构、实际图片传递、资料读取和审查命令执行记录。语义正确性仍是模型判断，不声称规则可以证明文案质量、研究结论或完整需求覆盖。自述 evidence 与控制器 execution 记录分开保存。
@@ -44,7 +90,7 @@ Worker 的 `max-tokens` 属于本次生成失败，不能当作可恢复环境�
 
 ## 原有执行机制
 
-当前实现包含 Kimi Code 研发 Worker、五个可直接调用的专业模型路由、专业 DAG 调度，以及独立 Kimi 质量门禁。模型与角色全部在 `../agent.cordis.yml` 配置；历史 `agent.prompt-based.yml` 不参与加载。根助手可调用 `request_capability`、`capability_status`、`delivery_start`、`delivery_resume`、`delivery_status`、五个 `task_*`、`multimodel_run`、`skill`、`todo_write` 和 `ask_user_question`。不加载旧版动态 workflow 或后台 jobs。专业工具注册在本地控制器插件中，共用原生工具隔离适配器，不重复挂载不受控文件/Shell 插件。
+当前实现包含 Kimi K2.8 首选研发 Worker 和一次性 DeepSeek 恢复 Worker、四个专业入口 task_minimax_design/task_kimi_quality/task_glm_vision/task_doubao_media、专业 DAG 调度及风险验收。模型与角色全部在 `../agent.cordis.yml` 配置；历史 `agent.prompt-based.yml` 不参与加载。根助手通过 delivery_*、request_capability、capability_status、multimodel_run、skill、todo_write 和 ask_user_question 编排。专业工具共用隔离适配器，不挂载不受控文件/Shell 插件。
 
 `multimodel_run` 参数为 `{nodes:[{id,tool,objective,dependsOn}]}`，最多 10 个节点，启动前拒绝重复 ID、未知依赖和环；同一 DAG 使用一个输入快照，依赖报告自动传入下游，各节点使用独立只读副本。所有专业调用（包括自动 Kimi 门禁）共用最多 3 个并发槽位。失败节点只阻断下游。单次调用超时含排队时间，取消时清理等待、子 Agent 和副本。
 
@@ -52,17 +98,19 @@ Worker 的 `max-tokens` 属于本次生成失败，不能当作可恢复环境�
 
 实现/修复 Worker 现在在每轮独立的临时工作副本中开发：复用 DSH 原生 `read/write/edit`、`glob/grep` 和 `bash`，完成后只返回结构化摘要。控制器收集实际文件差异、检查合同、冻结快照并独立验收。`snapshot_explore` 保留为读取本轮初始快照的补充工具；无需全量文件进入提示。仍不支持二进制变更。
 
+`read` 会把模型从 Markdown 文本复制出的标点转义还原，例如 `BUSINESS\_RULES.md` 按 `BUSINESS_RULES.md` 处理。若相对路径在会话根目录不存在，Runtime 会在工作区内按完整路径后缀查找；只有唯一候选时自动读取，例如把 `docs/BUSINESS_RULES.md` 定位到 `demo1-candidate/docs/BUSINESS_RULES.md`。多个项目存在同名候选时拒绝猜测并列出候选。该恢复仅用于只读操作，不会模糊匹配写入、编辑或 Shell 工作目录，也不会跟随符号链接或越过工作区。
+
 ## 启动
 
 1. 使用 Node.js 24+ 和支持 `tools.guard()`、`tools.presentAs()`、用户命令、结构化子 Agent 的 DSH。已对本机 `0.1.5-rc.2` 源码的构建产物做真实接口测试。
 2. 把整个“模型路由”目录作为用户 preset 部署/刷新；单独复制 YAML 不够，`tool-delivery-controller/` 和验收合同必须一起存在。宿主提供 `commands`、`tools`、`subagents`，并注册 `spawn` 提供方及配置中的模型路由。无需安装额外 npm 依赖。
 3. 在待交付项目目录中启动/创建 DSH 会话并选择“拼好模”。不要把此 preset 的维护目录当作交付项目。验收合同必须位于交付项目之外；状态默认保存在 `~/.dsh-delivery`，也必须在交付项目之外。
-4. 默认 `../delivery-contract.json` 使用通用工作区合同（`layout: workspace`）：不要求 `src/`、`tests/`、包配置或任何固定测试命令。`editablePaths: ["**"]` 允许工作区内普通文件；路径边界、隐藏/二进制文件限制、任务范围、冲突保护和独立审查仍生效。实现器和审查者按实际项目执行适用检查，未运行的检查不得声称通过。维护者仍可配置专项合同的保护路径、必要输入和固定检查；这些明确配置不会被自动删除。
+4. 默认 `../delivery-contract.json` 使用通用工作区合同（`layout: workspace`）：不要求 `src/`、`tests/`、包配置或任何固定测试命令。`editablePaths: ["**"]` 允许工作区内普通文件；路径边界、隐藏/二进制文件限制、任务范围和冲突保护仍生效。实现器按实际项目执行适用检查，未运行的检查不得声称通过。维护者仍可配置专项合同的保护路径、必要输入和固定检查；这些明确配置不会被自动删除。
 5. 当前 Worker 原生工具适配器支持 macOS Seatbelt，配置中的 `runtimePackageJson` 指向本机 DSH 安装包，`sandbox.nodeExecutable` 指向其 Node。Docker 验证 Runner 保留，但 Docker Worker 工具运行时尚未接入，非 macOS 任务会 blocked；不回退到宿主直接执行。沙箱不可用或外层禁止嵌套时同样 blocked。
 
-单 HTML 创建或修改使用 `delivery_start({objective: "原始目标与约束", singleHtmlPath: "pelican-bicycle.html"})`。控制器选择内置 HTML 合同，只允许修改该根目录文件，禁止额外文件、删除交付物、路径穿越和多任务/产物导入；无需预先创建 `src/`、`tests/`。既有部署保护路径仍生效。默认执行 HTML 结构与脚本检查、独立质量审查、同步和同步后复核。结构检查不证明图形正确或动画流畅，模块脚本语法、视觉与完整自然语言要求由独立审查判断，不声明已经浏览器验证。未传 `singleHtmlPath` 时仍使用部署的项目合同，不根据自然语言静默放宽权限。
+单 HTML 创建或修改可使用 `delivery_start({objective: "原始目标与约束", singleHtmlPath: "pelican-bicycle.html"})`。控制器先设计方案，再在内置 HTML 合同下实现，只允许修改目标文件，禁止额外文件、删除交付物、路径穿越和多任务/产物导入。默认检查 HTML 结构与脚本并同步复核；结构检查不证明图形正确或动画流畅。简单修改仍走同一 Kimi K2.8 实现入口。
 
-用户偏好按两个正交维度执行。明确“不使用 Skill”只禁用根与所有子模型的 `skill` 工具，不取消动画方案、实现或验证。明确“不验证/不检查/不测试/不审查”只对独立、project 模式的单 HTML 启用持久化的 `assurance=unverified`：动画仍先规划，Worker 仍在隔离副本内只写目标文件，控制器仍做路径约束、冲突保护与快照一致性同步，但不运行合同检查、独立质量审查、同步后检查或自动修复。结果与同步回执固定记录 `verified=false`，不得描述成验收通过。多模块、partial、任务 DAG 与产物导入拒绝无验证模式。两项要求可以分别出现或同时出现；拆成下一条消息表达也不会开放根目录直接写动画 HTML 的旁路。
+用户明确“不使用 Skill”时，根与子模型的 skill 工具在该轮禁用。明确“不验证/不检查/不测试”时，独立 project 单 HTML 可启用 assurance=unverified：保留产品设计、隔离实现、路径边界、冲突保护与快照一致性同步，跳过检查、独立验收和自动修复；结果明确记录 verified=false。
 
 命令由 DSH 用户命令处理器直接执行，不需要模型选择是否调用工作流：
 
@@ -93,14 +141,14 @@ Worker 的 `max-tokens` 属于本次生成失败，不能当作可恢复环境�
 
 ## 固化了哪些约束
 
-- **状态机**：默认 `assurance=verified` 时，模型结束实现只能进入 verify；所有合同检查和独立质量门禁通过后才能进入 partial 的 passed 或 project 的 syncing，project 同步复核后才能 passed。合同或质量失败自动进入 repair，预算用尽为 failed；质量 blocked 暂停在验证阶段。仅用户明确取消验证的受限单 HTML 使用 `assurance=unverified`，实现后可直接进入 syncing，但 Store 只接受空验证证据、空质量报告和 `verified=false` 回执，不能伪装成已验证。
+- **状态机**：新建交付从 design/designing 开始，方案成功才可实现。verified 交付在合同检查与适用的独立验收通过后才能同步；risk_based 策略对 high 方案启用验收门禁。历史 required/on_request 任务保留既有策略。仅明确取消验证的受限单 HTML 使用 unverified，Store 只接受空验证证据、空质量报告和 verified=false 回执。
 - **工具边界**：根助手使用交付、专业委派、DAG、Skill、todo 和提问入口。用户当前请求明确禁用 Skill 时，同一执行策略对根和所有子会话隐藏并拒绝 `skill`，其他环节不受影响。执行工具要求控制器绑定的活跃子会话身份；Worker allowlist 包含六个原生工具、`snapshot_explore` 和受控 `request_capability`，禁止任意委派、提权、后台任务、MCP 和 `run_code`。结构化输出由受信子 Agent 运行时注册。工具注册器/管理界面可列出注册定义，但发送给根助手模型的工具 schema 会按角色过滤；执行时仍使用同一策略检查权限。
 - **Worker 隔离**：原生工具的 schema、编辑和搜索实现复用安装包；每次执行在独立 Seatbelt helper 进程内运行，允许读系统运行库和 DSH 运行时，允许写工作副本和临时目录，禁止网络和工作区外私有文件读取，不继承宿主环境变量。文件路径限定在工作副本，拒绝路径中的符号链接。Shell 可在整个副本内调试，最终差异必须符合合同（包括保护文件）；每轮结束撤销工具访问、收集差异并删除临时副本。
 - **原生适配范围**：保留原生 read/write/edit/glob/grep/bash 的参数、执行和结果格式。helper 不挂载跨调用文件观察策略或附件服务；专业模型的 read_image 由控制器单独读取不可变快照并接入宿主附件服务；edit 的字面量唯一匹配仍由原生实现校验。搜索输出超过原始捕获预算会报错，需缩小范围；不提供完整输出落盘链接。
 - **路径边界**：只接受合同允许的相对路径，拒绝目录穿越、隐藏路径、重复路径、文件/目录冲突、保护文件修改和符号链接。
 - **可信验证入口**：argv 来自部署合同，Worker 可用 Shell 自测，但不能改变最终验收 argv、跳过检查或改写合同。验证代码运行在独立只读快照；macOS 只给临时目录写权限，禁止网络，限制宿主内容读取；Docker 只挂载快照并禁网。
 - **版本绑定**：合同、原始快照、每轮快照都有哈希。检查记录携带快照、命令、实际退出码、输出、时间和运行环境信息。
-- **有界执行**：最多两轮修复；总 Worker 调用上限为 `maxRepairs + 3`（给中断恢复留余量），最多六次验证轮次；调用前持久计数；当前 preset 每轮 Worker 300 秒；Shell 默认 30 秒、上限 60 秒，输出有上限；检查使用合同超时。
+- **有界执行**：最多两轮修复；总 Worker 调用上限为 `maxRepairs + 3`（给中断恢复留余量），最多六次验证轮次；调用前持久计数；当前 preset 每轮 Worker 600 秒；Shell 默认 30 秒、上限 60 秒，输出有上限；检查使用合同超时。
 - **审计**：SQLite WAL + FULL 同步；状态更新与对应事件在同一事务内提交。事件只追加，记录每轮变化和检查结果。工具拒绝另由 DSH 自身的工具执行轨迹记录。
 
 ## 恢复语义
@@ -161,7 +209,7 @@ npm run demo
 
 项目同步最多 3 次，集成重算最多 6 次，固定验收和同步后检查各最多 6 次；持续变化会明确 blocked，不无限重试。老记录未含 mode 时维持原导出语义，不追溯回写项目。
 
-同一交付中自动质量门禁遇到相同输入版本、目标及模型时，复用已验收且哈希完整的报告；固定检查仍实际执行，不用报告复用代替检查。
+required 或 risk_based 高风险交付的质量审查遇到相同输入版本、目标及模型时，可复用已验收且哈希完整的报告；固定检查仍实际执行。额外的 delivery_review 在交付完成后单独记录，不改变已交付文件状态。
 
 任务合同的存在、范围和依赖可强制校验；拆分是否合理、上下文是否在语义上充分、自然语言验收条件是否完全覆盖仍需模型判断和实际评估。用户选择的可信边界是已配置的宿主用户交互服务，不能把模型转述、普通提问工具结果或任意传入的字符串当作授权；未接入该服务时保持 blocked。
 
@@ -176,15 +224,15 @@ npm run demo
 
 ### 2026-09-21 单 HTML 延迟与上游恢复策略
 
-单 HTML 的推理等级优化只适用于 DeepSeek thinking 模型。当前 Kimi Code 正式路由会原样保留模型请求，不注入 DeepSeek 专用的 `reasoningEffort`；权限、写入范围、结构检查、质量门禁与同步门禁保持原样。
+单 HTML 与普通工程均先使用 Kimi K2.8；只有无有效写入且有界恢复耗尽时，控制器才启用配置的恢复 Worker。权限、写入范围、结构检查与同步门禁保持原样。
 
 Worker / reviewer 失败从子会话真实 turn/end 读取原始诊断（含 Request ID），避免只报告 `Worker did not complete: error`。流式空闲超时设置 120 秒冷却；request burst / rate limit / overload 设置 300 秒冷却。冷却按 provider/model 存入 delivery.sqlite，立即 resume、重启控制器、取消后新建交付均不会绕过对应模型的 Worker 冷却。主模型仍可报告现状，其他模型路由不受该记录阻断。单次交付发生第二次这类上游失败后终止为 failed，不能靠 resume 无限重启。
 
-`WORKER_NO_TOOL_DEADLINE`、`WORKER_TOOL_DEADLINE` 与 `WORKER_MAX_TOKENS` 是终止型执行故障，不是用户决策。状态返回 `retryableNow=false`、`nextAction=report_failure_and_wait_for_new_user_request`。同一用户 turn 内，工具策略同时从根模型隐藏并拒绝 `ask_user_question` 与新的 `delivery_start`；动画受控期间也不允许根模型自行询问绕过方案。只有新的真实用户消息开始下一 turn 后才解除这些 turn 级限制。控制器内部检测到真实文件冲突时仍通过受信任的冲突决策通道询问，不经过根模型编造选项。
+`WORKER_NO_TOOL_DEADLINE`、`WORKER_TOOL_DEADLINE` 与 `WORKER_MAX_TOKENS` 会终止当前交付，状态返回 `retryableNow=false`。无工具或只读恢复耗尽后，本轮禁止新建交付；下一条真实用户消息可重新开始。并发锁、未完成交付占用、供应商冷却和冲突保护仍由控制器执行，避免无界重试或覆盖文件。
 
 `DSH_LIVE=1 node tests/live-pelican.mjs` 运行原始不验证的直接生成案例；设置 `DSH_PELICAN_FULL=1` 则运行单 HTML project 实现、检查、独立审查与同步。在线测试只在显式授权下运行，凭据使用本机 DSH 凭据服务；产物与状态隔离在临时目录，记录真实阶段耗时。
 
-固定单 HTML 合同的实现 Worker 只开放 read/write，禁止 shell 自检与多次局部提交。控制器等待目标文件真实 write 成功回执，撤销后续工具调用、停止实现子会话、收集工作副本作为未验收草稿，再进入固定检查和 Kimi 审查。伪造完成、写错文件或工具失败不会触发交接。修复时也提交完整文件，仍受原修复次数预算与审查约束。通用工程 Worker 保留原工具集。
+固定单 HTML 合同的实现 Worker 只开放 read/write/html_chunk，禁止 shell 自检；html_chunk 按序分块并在 finish 后提交完整草稿。控制器等待目标文件真实 write 成功回执，撤销后续工具调用、停止实现子会话、收集工作副本作为未验收草稿，再进入固定检查。伪造完成、写错文件或工具失败不会触发交接。修复时也提交完整文件，仍受原修复次数预算约束。需要独立 Kimi 审查时，在交付后另行调用 `delivery_review`。通用工程 Worker 保留原工具集。
 
 单 HTML 固定检查额外拒绝已复现的 SVG 定位属性与同元素 CSS transform 动画覆盖冲突；错误信息引导将定位放在外层、动画放在内层。该检查是保守的局部静态规则，不能代替真实浏览器渲染，也不能验证全部动画几何关系或审美。
 
@@ -198,4 +246,4 @@ Worker 文件工具的相对路径以任务工作区为根；`/workspace/...` �
 
 ### 实现超时恢复（2026-09-22）
 
-`workerTimeoutMs` 为实现总时限，默认 600000ms。单 HTML 不再创建额外的 120 秒首次写入截止；供应商 stream idle timeout 继续单独检测无输出。控制器对已确认没有完成工具调用的执行超时/供应商 TIMEOUT，在原交付内自动重试一次，持久化 `executionRetries`，复用上游报告并保留检查和同步限制。重试输入收敛冗余而不能删减必要行为。重试前旧子模型和工作副本已销毁；取消、有工具操作、输出超限、限流不会进入此自动恢复路径。耗尽后失败码为 `WORKER_TIMEOUT_RETRIES_EXHAUSTED`，不能通过同轮新建交付重置预算。
+`workerTimeoutMs` 为实现总时限，默认 600000ms。单 HTML 另有 120 秒首工具期限与 180 秒首有效写入期限；供应商 stream idle timeout 继续单独检测无输出。控制器对已确认没有完成工具调用的执行超时/供应商 TIMEOUT，在原交付内自动重试一次，持久化 `executionRetries`，复用上游报告并保留检查和同步限制。重试输入收敛冗余而不能删减必要行为。重试前旧子模型和工作副本已销毁；取消、已经写入草稿或限流不会进入此自动恢复路径；仅零写入的输出超限或只读超时可有界恢复。耗尽后失败码为 `WORKER_TIMEOUT_RETRIES_EXHAUSTED`，不能通过同轮新建交付重置预算。

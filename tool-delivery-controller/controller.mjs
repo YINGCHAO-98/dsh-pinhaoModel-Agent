@@ -1,23 +1,30 @@
 import { compactQuality } from './request-policy.mjs';
+import { htmlStructureRegression } from './html-contract.mjs';
 import { realpath, mkdir, rename, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { capture, validateContract, assertRequired, applyProposal, materialize, digest, isWithin } from './files.mjs';
+import { capture, assertRequired, applyProposal, materialize, digest, isWithin } from './files.mjs';
 import { mergeSnapshots, syncPlan, applySync } from './sync.mjs';
-import { validateTasks } from './task-contracts.mjs';
+import { compileTask } from './task-ir.mjs';
+import { assertDesignReceipt, designReceipt } from './product-design.mjs';
 import { obtainDecision } from './decisions.mjs';
 const CHILD_DISPATCH = Symbol('controller-owned-child');
 
 export class DeliveryController {
-  constructor({ store, worker, runner, reviewer, deliveryInputs, askUser, ownerAlive = () => true, qualityGate = null, upstreamRoute = 'worker', workerTimeoutMs = 600000 }) {
+  constructor({ store, worker, runner, reviewer, designer, designGate = null, readDesign, deliveryInputs, askUser, ownerAlive = () => true, qualityGate = null, reviewPolicy = 'required', upstreamRoute = 'worker', workerTimeoutMs = 600000, recoveryWorkerAvailable = false }) {
     this.store = store;
     this.upstreamRoute = upstreamRoute;
     this.askUser = askUser;
     this.worker = worker;
     this.reviewer = reviewer;
+    if (!['required', 'on_request', 'risk_based'].includes(reviewPolicy)) throw new Error('Invalid reviewPolicy');
+    this.designer = designer; this.designGate = designGate; this.readDesign = readDesign;
     this.qualityGate = qualityGate;
+    this.reviewPolicy = reviewPolicy;
+    this.activeReviews = new Set();
     this.runner = runner;
     this.workerTimeoutMs = workerTimeoutMs;
+    this.recoveryWorkerAvailable = recoveryWorkerAvailable;
     this.deliveryInputs = deliveryInputs;
     this.ownerAlive = ownerAlive;
   }
@@ -52,7 +59,7 @@ export class DeliveryController {
       throw error;
     }
   }
-  async create({ owner, workspace, objective, contract, reportRefs = [], mode = 'project', sourceDeliveryIds = [], tasks = [], assurance = 'verified', ...extra }) {
+  async create({ owner, workspace, objective, contract, reportRefs = [], mode = 'project', sourceDeliveryIds = [], tasks = [], assurance = 'verified', context = {}, resources = {}, ...extra }) {
     if (Object.keys(extra).length) throw new Error('Unsupported delivery arguments; model-supplied conflict decisions are forbidden');
     if (typeof objective !== 'string' || !objective.trim() || objective.length > 16000) throw new Error('Invalid objective');
     if (!['partial', 'project'].includes(mode)) throw new Error('mode must be partial or project');
@@ -63,8 +70,9 @@ export class DeliveryController {
     workspace = await realpath(workspace);
     const stateRoot = await realpath(this.store.root);
     if (isWithin(stateRoot, workspace) || isWithin(workspace, stateRoot)) throw new Error('State directory must be outside the delivery workspace');
-    contract = validateContract(contract);
-    tasks = validateTasks(tasks, contract);
+    const compiled = compileTask({ goal: objective, projectRoot: workspace, deployment: contract, context, tasks, resources });
+    contract = compiled.contract;
+    tasks = compiled.tasks;
     if (tasks.length && mode !== 'project') throw new Error('Task groups require project mode');
     const unlock = this.store.lock(workspace);
     try {
@@ -96,8 +104,9 @@ export class DeliveryController {
         sourceDeliveries.push({ id, snapshot: source.snapshot, objective: source.objective, summary: source.workerSummary, evidence: source.evidence });
       }
       assertRequired(initialFiles, contract, { beforeImplementation: true });
-      return this.store.create({ owner, workspace, objective, contract, files, initialFiles, mode, sourceDeliveries, tasks, reportRefs,
-        assurance, qualityGate: assurance === 'verified' ? this.qualityGate : null });
+      return this.store.create({ owner, workspace, objective, contract, taskIR: compiled.taskIR, files, initialFiles, mode, sourceDeliveries, tasks, reportRefs,
+        assurance, designGate: this.designGate, reviewPolicy: this.reviewPolicy, reviewRoute: this.qualityGate,
+        qualityGate: assurance === 'verified' && this.reviewPolicy === 'required' ? this.qualityGate : null });
     } finally { unlock(); }
   }
   async resolveConflicts(id, owner, { parent, signal = new AbortController().signal, ...extra } = {}) {
@@ -201,7 +210,58 @@ export class DeliveryController {
     if (run.mode === 'project' && run.state === 'passed') {
       try { run.projectMatchesReceipt = digest(await capture(run.workspace)) === run.syncReceipt?.snapshot; } catch { run.projectMatchesReceipt = false; }
     }
+    const reviewEvent = this.store.history(id).findLast(event => event.kind.startsWith('review.'));
+    run.review = reviewEvent?.data ?? null;
+    if (run.review?.status === 'running' && !this.activeReviews.has(id))
+      run.review = { ...run.review, status: 'incomplete', reason: 'Review interrupted before completion' };
     return run;
+  }
+  // Advisory review of an immutable, already delivered snapshot. No delivery
+  // transitions, synchronization, repair dispatch or acceptance privileges.
+  async review(id, owner, { parent, signal = new AbortController().signal } = {}) {
+    const run = await this.status(id, owner);
+    if (run.state !== 'passed') throw new Error('Review requires an already completed delivery');
+    const route = run.reviewRoute ?? run.qualityGate;
+    if (!route || !this.reviewer) throw new Error('Independent reviewer is not configured');
+    const unlock = this.store.lock(`review:${id}`);
+    this.activeReviews.add(id);
+    const abort = new AbortController();
+    const combined = AbortSignal.any([signal, abort.signal]);
+    const timer = setTimeout(() => abort.abort(new DOMException('Independent review timed out', 'TimeoutError')), route.timeoutMs ?? 180000);
+    const identity = { snapshot: run.snapshot, provider: route.provider, model: route.model };
+    this.store.event(id, 'review.started', { ...identity, status: 'running' });
+    let onAbort;
+    try {
+      combined.throwIfAborted();
+      const interrupted = new Promise((_, reject) => {
+        onAbort = () => reject(combined.reason);
+        combined.addEventListener('abort', onAbort, { once: true });
+      });
+      const files = this.store.files(run.snapshot);
+      const changedPaths = syncPlan(this.store.files(run.baseSnapshot), files).map(change => change.path);
+      const productDesign = await this.loadProductDesign(run);
+      const report = await Promise.race([interrupted, this.reviewer({ route, parent, deliveryDirectory: run.workspace,
+        signal: combined, objective: run.objective, files, snapshot: run.snapshot, evidence: run.evidence,
+        context: JSON.stringify({ changedPaths, productDesign, instruction: 'Review the delivered changes against the original objective and product design acceptance criteria. Report actionable issues and limitations. Do not modify files.' }),
+        scope: `review:${id}:${run.snapshot}` })]);
+      combined.throwIfAborted();
+      if (!report || !['passed', 'failed', 'blocked'].includes(report.status)
+        || report.snapshot !== run.snapshot || report.provider !== route.provider || report.model !== route.model
+        || !report.evidence?.some(item => typeof item === 'string' && item.trim()))
+        throw new Error('Invalid/stale review report');
+      this.store.event(id, 'review.finished', compactQuality(report));
+    } catch (error) {
+      this.store.event(id, 'review.finished', { ...identity, status: 'incomplete',
+        reason: String(error.message ?? error), reasonCode: signal.aborted ? 'REVIEW_CANCELLED'
+          : combined.reason?.name === 'TimeoutError' || error.name === 'TimeoutError' || error.code === 'WORKER_EXECUTION_TIMEOUT'
+            || error.upstreamCode === 'TIMEOUT' ? 'REVIEW_TIMEOUT' : 'REVIEW_UNAVAILABLE' });
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) combined.removeEventListener('abort', onAbort);
+      this.activeReviews.delete(id);
+      unlock();
+    }
+    return this.status(id, owner);
   }
   cancelTree(run, reason) {
     this.store.rejectRunDecisions(run, reason);
@@ -228,9 +288,10 @@ export class DeliveryController {
         return this.store.move(run, 'failed', { reason: 'Worker output token budget exhausted; unchanged resume will not retry. Reduce scope or adjust model output budget before a new delivery.' }, 'worker.output_limit');
       }
       if (run.state === 'blocked' && run.retryNotBefore > Date.now()) return run;
-      if (run.state === 'blocked') this.store.move(run, run.resumeState, { reason: null, ...(run.resumeState === 'syncing' ? { evidence: run.evidence, quality: run.quality } : {}) }, 'resumed');
-      if (['implementing', 'repairing', 'verifying'].includes(run.state)) {
-        const resumeState = { implementing: 'implement', repairing: 'repair', verifying: 'verify' }[run.state];
+      if (run.state === 'blocked') this.store.move(run, run.resumeState, { reason: null, reasonCode: null,
+        ...(run.resumeState === 'syncing' ? { evidence: run.evidence, quality: run.quality } : {}) }, 'resumed');
+      if (['designing', 'implementing', 'repairing', 'verifying'].includes(run.state)) {
+        const resumeState = { designing: 'design', implementing: 'implement', repairing: 'repair', verifying: 'verify' }[run.state];
         this.store.move(run, 'blocked', { resumeState, reason: 'Interrupted execution recovered' }, 'interrupted');
         this.store.move(run, resumeState, { reason: null }, 'resumed');
       }
@@ -240,9 +301,35 @@ export class DeliveryController {
       while (true) {
         signal.throwIfAborted();
         stage = run.state;
-        if (run.state === 'collecting') {
+        if (run.state === 'design') {
+          if (!this.designer || !run.designGate) throw new Error('Product designer is not configured');
+          if (run.designAttempts >= 2) return this.store.move(run, 'failed', { reason: 'Product design retry budget exhausted', reasonCode: 'DESIGN_RETRIES_EXHAUSTED' });
+          this.assertWorkerAvailable();
+          this.store.move(run, 'designing', { designAttempts: run.designAttempts + 1 }, 'design.started');
+          try {
+            const designSignal = AbortSignal.any([signal, AbortSignal.timeout(run.designGate.timeoutMs ?? 180000)]);
+            const report = await this.designer({ route: run.designGate, run, parent, signal: designSignal,
+              files: this.store.files(run.baseSnapshot), snapshot: run.baseSnapshot, deliveryDirectory: run.workspace });
+            designSignal.throwIfAborted();
+            const productDesign = designReceipt(report, run);
+            const qualityGate = run.assurance !== 'unverified' && run.reviewPolicy === 'risk_based' && productDesign.plan.riskLevel === 'high'
+              ? run.reviewRoute : run.qualityGate;
+            this.store.move(run, run.tasks.length || run.sourceDeliveries.length ? 'collecting' : 'implement',
+              { productDesign, qualityGate, reason: null, reasonCode: null }, 'design.accepted');
+          } catch (error) {
+            if (signal.aborted) throw error;
+            // A rejected output schema cannot succeed with identical inputs.
+            // Do not consume a second design attempt on explicit resume.
+            const unsupportedSchema = error?.code === 'UNSUPPORTED_SCHEMA';
+            return this.store.move(run, unsupportedSchema || run.designAttempts >= 2 ? 'failed' : 'blocked',
+              { resumeState: 'design', reason: `Product design failed: ${error.message}`,
+                reasonCode: unsupportedSchema ? 'PRODUCT_DESIGN_SCHEMA_UNSUPPORTED' : 'PRODUCT_DESIGN_FAILED' }, 'design.failed');
+          }
+        } else if (run.state === 'collecting') {
+          await this.loadProductDesign(run);
           await this.collect(run, owner, { signal, parent });
         } else if (run.state === 'implement' || run.state === 'repair') {
+          const productDesign = await this.loadProductDesign(run);
           const backoff = this.store.upstreamBackoff(this.upstreamRoute);
           if (backoff) return this.store.move(run, 'blocked', { ...backoff, resumeState: run.state }, 'upstream.cooldown');
           if (run.workerCalls >= run.contract.maxRepairs + 3) throw new Error('Worker dispatch budget exhausted');
@@ -255,25 +342,51 @@ export class DeliveryController {
           const upstreamReports = await this.deliveryInputs?.(run.id, owner, run.reportRefs ?? []) ?? [];
           if (upstreamReports.length) this.store.event(run.id, 'reports.handed_off', { ids: upstreamReports.map(r => r.id) });
           let proposal;
-          try { proposal = await this.worker({ parent, deliveryDirectory: run.workspace, signal: workerSignal, objective: run.objective, taskContext: run.taskContext ?? null, sourceDeliveries: run.sourceDeliveries ?? [], deliveryId: run.id, assurance: run.assurance ?? 'verified', upstreamReports,
-            phase: isRepair ? 'repair' : 'implement', files,
+          try { proposal = await this.worker({ parent, deliveryDirectory: run.workspace, signal: workerSignal, objective: run.objective, taskIR: run.taskIR, taskContext: run.taskContext ?? null, sourceDeliveries: run.sourceDeliveries ?? [], deliveryId: run.id, assurance: run.assurance ?? 'verified', upstreamReports,
+            phase: isRepair ? 'repair' : 'implement', files, productDesign,
             contract: run.contract, evidence: run.quality ? [...run.evidence, { id: 'independent-quality', ...compactQuality(run.quality) }] : run.evidence, repairCount: run.repairCount,
-            recovery: run.executionRetries ? { attempt: run.executionRetries, instruction: 'The preceding attempt timed out before any completed tool call. Produce a concise but complete implementation; avoid verbose commentary and decorative complexity. Preserve all required behavior and validation. Do not emit a partial skeleton as a completed HTML.' } : null });
+            recovery: run.recoveryAttempts ? { attempt: run.recoveryAttempts, route: 'recovery-worker', reason: 'primary_worker_no_progress', instruction: 'The primary worker made no tool calls. Use the same isolated workspace and submit the requested artifact promptly; all original checks and limits still apply.' }
+              : run.outputRetries ? { attempt: run.outputRetries, reason: 'output_limit_without_tool_calls', instruction: 'Submit the first valid artifact chunk immediately. Continue in small chunks until complete. Preserve all required behavior.' }
+              : run.executionRetries ? { attempt: run.executionRetries, reason: 'execution_timeout', instruction: 'The preceding attempt timed out without mutating files. Produce a concise but complete implementation; avoid verbose commentary and decorative complexity. Preserve all required behavior and validation. Do not emit a partial skeleton as a completed HTML.' } : null });
           } catch (error) {
             // The adapter has disposed the previous child and isolated copy.
+            if (!signal.aborted && error.code === 'WORKER_MAX_TOKENS' && (error.executionCount === 0 || error.safeToRetry === true)
+              && !(run.recoveryAttempts ?? 0) && (run.outputRetries ?? 0) < 1) {
+              this.store.move(run, 'blocked', { resumeState: isRepair ? 'repair' : 'implement',
+                outputRetries: (run.outputRetries ?? 0) + 1, reason: error.message,
+                reasonCode: 'WORKER_MAX_TOKENS', lastWorkerToolCalls: 0 }, 'worker.output_retry_scheduled');
+              this.store.move(run, isRepair ? 'repair' : 'implement', { reason: null, reasonCode: null }, 'worker.output_retry_started');
+              continue;
+            }
+            if (!signal.aborted && error.code === 'WORKER_MAX_TOKENS' && (error.executionCount === 0 || error.safeToRetry === true)
+              && this.recoveryWorkerAvailable && !(run.recoveryAttempts ?? 0)) {
+              this.store.move(run, 'blocked', { resumeState: isRepair ? 'repair' : 'implement',
+                recoveryAttempts: 1, reason: error.message, reasonCode: 'WORKER_MAX_TOKENS', lastWorkerToolCalls: 0 }, 'worker.route_recovery_scheduled');
+              this.store.move(run, isRepair ? 'repair' : 'implement', { reason: null, reasonCode: null }, 'worker.route_recovery_started');
+              continue;
+            }
             // Retry only a timeout with confirmed zero completed tool calls;
             // cancellation, partial writes, output exhaustion and rate limits
             // never enter this path. Persist the budget before dispatch.
             const timeoutFailure = error.code === 'WORKER_EXECUTION_TIMEOUT'
               || (error.code === 'WORKER_UPSTREAM' && error.upstreamCode === 'TIMEOUT');
-            if (!signal.aborted && timeoutFailure && error.executionCount === 0 && (run.executionRetries ?? 0) < 1) {
+            if (!signal.aborted && timeoutFailure && (error.executionCount === 0 || error.safeToRetry === true)
+              && !(run.recoveryAttempts ?? 0) && (run.executionRetries ?? 0) < 1) {
               this.store.move(run, 'blocked', { resumeState: isRepair ? 'repair' : 'implement',
                 executionRetries: (run.executionRetries ?? 0) + 1, reason: error.message,
-                reasonCode: error.upstreamCode ?? error.code, lastWorkerToolCalls: 0 }, 'worker.retry_scheduled');
+                reasonCode: error.upstreamCode ?? error.code, lastWorkerToolCalls: error.executionCount ?? 0 }, 'worker.retry_scheduled');
               this.store.move(run, isRepair ? 'repair' : 'implement', { reason: null, reasonCode: null }, 'worker.retry_started');
               continue;
             }
-            if (!signal.aborted && timeoutFailure && error.executionCount === 0 && (run.executionRetries ?? 0) >= 1) {
+            if (!signal.aborted && timeoutFailure && (error.executionCount === 0 || error.safeToRetry === true) && this.recoveryWorkerAvailable
+              && (run.executionRetries ?? 0) >= 1 && !(run.recoveryAttempts ?? 0)) {
+              this.store.move(run, 'blocked', { resumeState: isRepair ? 'repair' : 'implement',
+                recoveryAttempts: 1, reason: error.message, reasonCode: error.upstreamCode ?? error.code,
+                lastWorkerToolCalls: 0 }, 'worker.route_recovery_scheduled');
+              this.store.move(run, isRepair ? 'repair' : 'implement', { reason: null, reasonCode: null }, 'worker.route_recovery_started');
+              continue;
+            }
+            if (!signal.aborted && timeoutFailure && (error.executionCount === 0 || error.safeToRetry === true) && (run.executionRetries ?? 0) >= 1) {
               this.store.move(run, 'failed', { reason: `Worker timeout recovery exhausted after one automatic retry: ${error.message}`,
                 reasonCode: 'WORKER_TIMEOUT_RETRIES_EXHAUSTED', lastWorkerToolCalls: 0 }, 'worker.retry_exhausted');
               return run;
@@ -281,12 +394,14 @@ export class DeliveryController {
             throw error;
           }
           workerSignal.throwIfAborted();
+          await this.loadProductDesign(run);
           await this.deliveryInputs?.(run.id, owner, run.reportRefs ?? []);
           const next = applyProposal(files, proposal, run.contract);
           this.store.event(run.id, 'worker.submitted', { summary: proposal.summary, execution: proposal.execution ?? [], tokenUsage: proposal.tokenUsage ?? null });
           const snapshot = this.store.snapshot(next);
           this.store.move(run, 'verify', { snapshot, workerSummary: proposal.summary });
         } else if (run.state === 'verify') {
+          await this.loadProductDesign(run);
           await this.assertSources(run);
           if (run.verifyCalls >= 6) throw new Error('Verification dispatch budget exhausted');
           if (run.mode === 'project') {
@@ -322,6 +437,20 @@ export class DeliveryController {
             signal.throwIfAborted();
             const result = await this.runner.check({ files, snapshot: run.snapshot, check, signal });
             if (result.id !== check.id || result.snapshot !== run.snapshot) throw new Error('Verifier returned stale/mismatched evidence');
+            if (check.id === 'single-html' && result.kind === 'passed') {
+              const path = run.contract.requiredOutputs[0];
+              const before = this.store.files(run.baseSnapshot)[path];
+              const after = files[path];
+              if (before && after) {
+                const regression = htmlStructureRegression(Buffer.from(before, 'base64').toString('utf8'),
+                  Buffer.from(after, 'base64').toString('utf8'));
+                if (regression) {
+                  result.kind = 'failed';
+                  result.reasonCode = 'HTML_STRUCTURE_REGRESSION';
+                  result.structureRegression = regression;
+                }
+              }
+            }
             this.store.event(run.id, 'check.finished', result);
             evidence.push(result);
           }
@@ -335,8 +464,25 @@ export class DeliveryController {
             if (!this.reviewer) throw new Error('Required independent quality reviewer unavailable');
             const reviewSignal = AbortSignal.any([signal, AbortSignal.timeout(this.workerTimeoutMs)]);
             this.store.event(run.id, 'quality.started', { model: run.qualityGate.model, snapshot: run.snapshot });
-            quality = await this.reviewer({ route: run.qualityGate, parent, deliveryDirectory: run.workspace, signal: reviewSignal,
-              objective: run.objective, context: JSON.stringify({ taskContext: run.taskContext ?? null, requiredTasks: run.tasks ?? [], sources: run.sourceDeliveries ?? [] }), files, snapshot: run.snapshot, evidence, scope: run.id });
+            try {
+              quality = await this.reviewer({ route: run.qualityGate, parent, deliveryDirectory: run.workspace, signal: reviewSignal,
+                objective: run.objective, context: JSON.stringify({ productDesign: await this.loadProductDesign(run), taskContext: run.taskContext ?? null, requiredTasks: run.tasks ?? [], sources: run.sourceDeliveries ?? [] }), files, snapshot: run.snapshot, evidence, scope: run.id });
+            } catch (error) {
+              const recoverable = error.code === 'WORKER_EXECUTION_TIMEOUT'
+                || (error.code === 'WORKER_UPSTREAM' && error.upstreamCode === 'TIMEOUT');
+              if (!signal.aborted && recoverable && (run.qualityRetries ?? 0) < 1) {
+                this.store.move(run, 'blocked', { resumeState: 'verify', qualityRetries: (run.qualityRetries ?? 0) + 1,
+                  reason: error.message }, 'quality.retry_scheduled');
+                this.store.move(run, 'verify', { reason: null }, 'quality.retry_started');
+                continue;
+              }
+              if (!signal.aborted && recoverable && (run.qualityRetries ?? 0) >= 1) {
+                this.store.move(run, 'failed', { reason: `Independent review timeout recovery exhausted: ${error.message}`,
+                  reasonCode: 'QUALITY_TIMEOUT_RETRIES_EXHAUSTED' }, 'quality.retry_exhausted');
+                return run;
+              }
+              throw error;
+            }
             reviewSignal.throwIfAborted();
             if (!quality || !['passed', 'failed', 'blocked'].includes(quality.status)
               || quality.snapshot !== run.snapshot || quality.model !== run.qualityGate.model
@@ -438,6 +584,16 @@ export class DeliveryController {
     await rm(target, { recursive: true, force: true });
     await rename(staging, target);
     return target;
+  }
+  async loadProductDesign(run) {
+    if (!run.designGate) return null;
+    const ownerRun = run.parentId ? this.store.get(run.parentId, run.owner) : run;
+    assertDesignReceipt(ownerRun);
+    if (this.readDesign) {
+      const report = await this.readDesign(ownerRun.productDesign.artifactRef, run.owner);
+      if (designReceipt(report, ownerRun).hash !== ownerRun.productDesign.hash) throw new Error('PRODUCT_DESIGN_INTEGRITY: upstream plan changed');
+    }
+    return ownerRun.productDesign;
   }
   cancel(id, owner, reason = 'Cancelled by user command') {
     const run = this.store.get(id, owner);

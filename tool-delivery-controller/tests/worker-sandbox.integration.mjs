@@ -7,6 +7,24 @@ import { WorkerWorkspaces } from '../workspace.mjs';
 const config = { runtimePackageJson: '/Applications/DSH Desktop.app/Contents/Resources/app/package.json',
   sandbox: { backend: 'seatbelt', nodeExecutable: process.execPath } };
 
+test('single HTML worker may replace an incomplete chunk draft only with a full write to its target', async t => {
+  const manager = new WorkerWorkspaces(config);
+  const signal = new AbortController().signal;
+  const session = await manager.open({}, { session: { id: 'parent' } }, signal);
+  session.child = 'worker'; session.allowedTools = ['read', 'write', 'html_chunk'];
+  session.expectedOutput = resolve(session.root, 'page.html');
+  session.draftReady = Promise.withResolvers();
+  t.after(() => manager.close(session));
+  const exec = { agent: { session: { id: 'worker', header: { parentSession: 'parent' } } }, signal, callId: 'test-call' };
+  await manager.htmlChunk({ action: 'append', index: 0, content: '<!doctype html><html><body>incomplete' }, exec);
+  await assert.rejects(manager.invoke('write', { file_path: 'other.html', content: 'bad' }, exec), /HTML_CHUNK_MODE/);
+  await assert.rejects(manager.invoke('edit', { file_path: 'page.html', old_string: 'incomplete', new_string: 'bad' }, exec), /HTML_CHUNK_MODE/);
+  const replacement = '<!doctype html><html><head></head><body>complete</body></html>';
+  await manager.invoke('write', { file_path: 'page.html', content: replacement }, exec);
+  assert.equal(await readFile(session.expectedOutput, 'utf8'), replacement);
+  assert.equal(session.htmlChunks, null);
+});
+
 test('native tools edit and test isolated workspace, block host reads/writes/network and revoke access', async t => {
   const projectDir = await mkdtemp(resolve(tmpdir(), 'worker-project-'));
   const secretDir = await mkdtemp(resolve(tmpdir(), 'worker-secret-'));
@@ -96,26 +114,30 @@ test('quality workspace rejects file edits and shell writes but can run checks',
   assert.equal(check.exitCode, 0);
 });
 
-test('root can write/read/edit its project while outside and symlink paths remain denied', async t => {
+test('root reads its project but cannot mutate or follow outside and symlink paths', async t => {
   const { symlink } = await import('node:fs/promises');
   const base = await mkdtemp(resolve(tmpdir(), 'root-files-'));
   const project = resolve(base, 'project');
   const { mkdir } = await import('node:fs/promises');
   await mkdir(project);
+  await mkdir(resolve(project, 'demo1-candidate/docs'), { recursive: true });
+  await writeFile(resolve(project, 'demo1-candidate/docs/BUSINESS_RULES.md'), 'nested rules');
   const secret = resolve(base, 'outside.txt');
   await writeFile(secret, 'unchanged');
   const manager = new WorkerWorkspaces(config);
   const exec = { agent: { session: { id: 'root', header: { cwd: project } } }, signal: new AbortController().signal };
   const call = (name, args) => manager.invoke(name, args, exec);
   t.after(() => rm(base, { recursive: true, force: true }));
-  await call('write', { file_path: 'page.html', content: '<html>first</html>' });
-  await call('edit', { file_path: 'page.html', old_string: 'first', new_string: 'second' });
-  assert.match(JSON.stringify(await call('read', { file_path: 'page.html' })), /second/);
-  assert.equal(await readFile(resolve(project, 'page.html'), 'utf8'), '<html>second</html>');
-  await assert.rejects(call('write', { file_path: secret, content: 'bad' }), /outside/);
+  await writeFile(resolve(project, 'page.html'), '<html>fixture</html>');
+  await assert.rejects(call('write', { file_path: 'page.html', content: 'bad' }), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  await assert.rejects(call('edit', { file_path: 'page.html', old_string: 'fixture', new_string: 'bad' }), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
+  assert.match(JSON.stringify(await call('read', { file_path: 'page.html' })), /fixture/);
+  assert.match(JSON.stringify(await call('read', { file_path: 'docs/BUSINESS\\_RULES.md' })), /nested rules/);
+  assert.equal(await readFile(resolve(project, 'page.html'), 'utf8'), '<html>fixture</html>');
+  await assert.rejects(call('write', { file_path: secret, content: 'bad' }), /ROOT_IMPLEMENTATION_NOT_ALLOWED/);
   await assert.rejects(call('read', { file_path: '../outside.txt' }), /outside/);
   await symlink(secret, resolve(project, 'link'));
-  await assert.rejects(call('write', { file_path: 'link', content: 'bad' }), /Symlink/);
+  await assert.rejects(call('read', { file_path: 'link' }), /Symlink/);
   await assert.rejects(call('bash', { command: 'true' }), /ROOT_TOOL_NOT_ALLOWED/);
   assert.equal(await readFile(secret, 'utf8'), 'unchanged');
 });

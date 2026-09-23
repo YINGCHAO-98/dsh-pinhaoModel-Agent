@@ -67,7 +67,7 @@ test('manifest and identity cannot be rewritten; omitted or failed required task
 });
 test('task schema rejects missing context, cycle, scope escalation and invented check commands', () => {
   for (const tasks of [[{ ...task('a'), context: '' }], [task('a', ['b']), task('b', ['a'])],
-    [{ ...task('a'), editablePaths: ['tests/'] }], [{ ...task('a'), checkIds: [] }], [{ ...task('a'), checkIds: ['skip-tests'] }],
+    [{ ...task('a'), editablePaths: ['tests/'] }], [{ ...task('a'), checkIds: ['skip-tests'] }],
     [{ ...task('a'), checks: [{ argv: ['true'] }] }]]) assert.throws(() => validateTasks(tasks, contract));
 });
 async function conflict(t, askUser) {

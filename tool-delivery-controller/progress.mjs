@@ -2,7 +2,7 @@
 // UI-only: never inject heartbeat text into model messages or claim model thinking.
 const terminal = new Set(['passed', 'failed', 'blocked', 'cancelled', 'invalidated']);
 const sessions = new WeakMap();
-const names = { queued: '等待依赖', collecting: '执行子任务并集成', implement: '准备实现', implementing: '实现中',
+const names = { design: '准备产品设计方案', designing: 'MiniMax 制定产品设计方案', queued: '等待依赖', collecting: '执行子任务并集成', implement: '准备实现', implementing: '实现中',
   repair: '准备修复', repairing: '修复中', verify: '准备验收', verifying: '执行检查', syncing: '同步并复核',
   passed: '已完成', failed: '失败', blocked: '阻塞', cancelled: '已取消', invalidated: '产物已失效' };
 
@@ -10,7 +10,7 @@ export function deliveryTodos(run, children = [], history = [], seconds = 0) {
   if (!run) return [
     { content: '准备输入与交付快照', status: 'in_progress' },
     { content: '实现任务', status: 'pending' },
-    { content: '执行检查与独立审查', status: 'pending' },
+    { content: '执行本地检查', status: 'pending' },
     { content: '交付产物', status: 'pending' },
   ];
   const unverified = run.assurance === 'unverified';
@@ -32,6 +32,8 @@ export function deliveryTodos(run, children = [], history = [], seconds = 0) {
   const checkingActive = ['verify', 'verifying'].includes(run.state) && !reviewing;
   const todos = [
     { content: '准备输入与交付快照', status: 'completed' },
+    ...(run.designGate ? [{ content: decorate('产品设计方案（MiniMax M3）', ['design', 'designing'].includes(run.state)),
+      status: run.productDesign ? 'completed' : active(['design', 'designing'].includes(run.state)) }] : []),
     ...children.map(child => {
       const selected = !ended && !terminal.has(child.state) && child.state !== 'queued';
       return { content: decorate(`子任务 ${child.taskKey}：${child.objective.slice(0, 160)}（${names[child.state] ?? child.state}）`, selected),

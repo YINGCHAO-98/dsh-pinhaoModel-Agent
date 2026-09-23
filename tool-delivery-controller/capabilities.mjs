@@ -7,19 +7,23 @@ import { capture, capabilityPaths, digest, hash, safePath } from './files.mjs';
 
 // Authoritative capability contracts. Skills describe methods, never routing or permissions.
 export const capabilities = Object.freeze({
-  research: { tool: 'task_kimi_research', description: 'Read supplied documents and produce a sourced synthesis.', input: 'text', worker: true },
-  creative_writing: { tool: 'task_minimax_creative', description: 'Produce complete copy, scripts or creative variants.', input: 'optional', worker: true },
-  animation_planning: { tool: 'task_doubao_animation', description: 'Design animation visuals, actions, pacing and shot-by-shot storyboards; does not implement code or generate video.', input: 'optional', worker: false },
+  product_design: { tool: 'task_minimax_design', description: 'Design product goals, functions, user flows, architecture, implementation approach and acceptance criteria; no code implementation.', input: 'optional', worker: true },
   visual_analysis: { tool: 'task_glm_vision', description: 'Analyze supplied static images; does not generate images.', input: 'image', worker: true },
   media_analysis: { tool: 'task_doubao_media', description: 'Analyze supplied images, subtitles or text; no native audio/video.', input: 'text-or-image', worker: true },
   quality_review: { tool: 'task_kimi_quality', description: 'Independently inspect code and run checks.', input: 'code', worker: false },
+});
+
+export const unavailableCapabilities = Object.freeze({
+  image_generation: { modelFamily: 'Seedream', available: false, reason: 'Image generation/editing adapter is not connected' },
+  video_generation: { modelFamily: 'Seedance', available: false, reason: 'Video generation adapter is not connected' },
+  native_media_analysis: { modelFamily: 'Doubao Seed 2.0 Lite', available: false, reason: 'Native audio/video transport is not connected; only supplied subtitles and frame images are supported' },
 });
 
 export const requestProperties = {
   capability: { type: 'string', enum: Object.keys(capabilities) },
   objective: { type: 'string', minLength: 1, maxLength: 16000 },
   reason: { type: 'string', minLength: 1, maxLength: 2000 },
-  singleModelGap: { type: 'string', minLength: 1, maxLength: 2000 },
+  singleModelGap: { type: 'string', minLength: 1, maxLength: 2000, description: 'Why specialist collaboration improves on single-model execution: a capability gap, stronger domain fit, independent perspective, or parallel speed.' },
   inputRefs: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 1000 } },
   expectedOutput: { type: 'string', minLength: 1, maxLength: 4000 },
   acceptanceCriteria: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1000 } },
@@ -158,14 +162,23 @@ export class CapabilityControl {
     });
     const images = fileRefs.filter(p => /\.(png|jpe?g|webp|gif)$/i.test(p));
     if (capability === 'visual_analysis' && !images.length) throw new Error('Visual analysis requires an image file reference');
-    if (['research', 'media_analysis'].includes(capability) && !fileRefs.length && !upstream.length)
+    if (capability === 'media_analysis' && !fileRefs.length && !upstream.length)
       throw new Error('This capability requires supplied input references');
-    const signature = hash(JSON.stringify({ capability, request, snapshot, refs, context: input.context ?? '' }));
+    if (capability === 'media_analysis' && fileRefs.some(path => /\.(mp4|mov|webm|mkv|mp3|wav|m4a|aac|ogg|flac)$/iu.test(path)))
+      throw new Error('NATIVE_MEDIA_UNAVAILABLE: supply subtitle text or frame images; native audio/video transport is not connected');
+    let signature = hash(JSON.stringify({ capability, request, snapshot, refs, context: input.context ?? '' }));
+    const baseSignature = signature;
     // A post-sync recheck may revisit an identical snapshot. Reuse only the automatic,
     // accepted, intact gate for this exact route/contract/snapshot; no extra model spend.
     if (!input.request && capability === 'quality_review') {
-      const saved = this.db.prepare('SELECT data FROM tasks WHERE owner=? AND scope=? AND signature=?').get(owner, scope, signature);
-      const previous = saved && JSON.parse(saved.data);
+      let saved = this.db.prepare('SELECT data FROM tasks WHERE owner=? AND scope=? AND signature=?').get(owner, scope, signature);
+      let previous = saved && JSON.parse(saved.data);
+      if (previous?.state === 'blocked' && previous.retryableTimeout === true) {
+        signature = hash(baseSignature + ':timeout-retry:1');
+        saved = this.db.prepare('SELECT data FROM tasks WHERE owner=? AND scope=? AND signature=?').get(owner, scope, signature);
+        previous = saved && JSON.parse(saved.data);
+        if (previous?.state === 'blocked') throw new Error('QUALITY_TIMEOUT_RETRIES_EXHAUSTED: automatic review recovery already attempted');
+      }
       if (previous?.state === 'accepted' && previous.model === route.model && previous.provider === route.provider) {
         const accepted = await this.artifact(`report:${previous.id}`, owner);
         signal.throwIfAborted();
@@ -201,7 +214,7 @@ export class CapabilityControl {
         violations.push('Required images were not delivered through read_image');
       if (capability === 'quality_review' && !records.some(r => r.tool === 'bash' && r.ok
         && r.commands?.some(c => c.exitCode === 0 && !c.timedOut))) violations.push('Reviewer did not execute a successful check');
-      if (['research', 'media_analysis'].includes(capability) && !upstream.length
+      if (capability === 'media_analysis' && !upstream.length
         && !records.some(r => ['read', 'snapshot_explore', 'read_image'].includes(r.tool) && r.ok)) violations.push('No source material was read');
       const status = violations.length ? 'blocked' : report.status;
       const value = { ...report, status, id: task.id, artifactRef: `report:${task.id}`, capability, contract: task.contract,
@@ -217,7 +230,9 @@ export class CapabilityControl {
       return value;
     } catch (error) {
       if (['running', 'submitted', 'validating'].includes(task.state)) this.save(task, signal.aborted ? 'cancelled' : 'blocked',
-        { error: String(error.message ?? error), elapsedMs: Date.now() - started });
+        { error: String(error.message ?? error), errorCode: error.code ?? null,
+          retryableTimeout: !signal.aborted && (error.code === 'WORKER_EXECUTION_TIMEOUT' || (error.code === 'WORKER_UPSTREAM' && error.upstreamCode === 'TIMEOUT')),
+          elapsedMs: Date.now() - started });
       throw error;
     } finally { this.running.delete(task.id); }
   }

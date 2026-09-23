@@ -1,11 +1,11 @@
 import { lstat, realpath } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import { safePath, isWithin } from './files.mjs';
-import { validateTasks } from './task-contracts.mjs';
+import { compileTask } from './task-ir.mjs';
 
 // Native harness semantics: all paths are relative to the session cwd unless
 // an explicit project directory is supplied. Never guess from directory names.
-export async function resolveDeliveryTarget(cwd, contract, { projectRoot = '.', tasks = [], singleHtmlPath } = {}) {
+export async function resolveDeliveryTarget(cwd, contract, { projectRoot = '.', tasks = [], singleHtmlPath, context = {}, goal = 'Resolve task context', resources = {} } = {}) {
   const sessionRoot = await realpath(cwd);
   if (typeof projectRoot !== 'string' || !projectRoot) throw new Error('Invalid projectRoot');
   if (singleHtmlPath && projectRoot !== '.') throw new Error('Single HTML delivery uses the session root');
@@ -23,9 +23,10 @@ export async function resolveDeliveryTarget(cwd, contract, { projectRoot = '.', 
   for (const task of normalized) if (Array.isArray(task.editablePaths)) {
     task.editablePaths = task.editablePaths.map(path => prefix && typeof path === 'string' && path.startsWith(prefix + '/') ? path.slice(prefix.length + 1) : path);
   }
-  try { validateTasks(normalized, contract); }
+  let compiled;
+  try { compiled = compileTask({ goal, projectRoot: selected, deployment: contract, context, tasks: normalized, resources }); }
   catch (error) { throw new Error(`${error.message}: ${JSON.stringify({ projectRoot: selected, editablePaths: contract.editablePaths, protectedPaths: contract.protectedPaths, checkIds: contract.checks.map(check => check.id) })}`); }
   return { sessionRoot, projectRoot: prefix || '.', workspace: selected, tasks: normalized,
-    deliveryDirectory: selected, editablePaths: contract.editablePaths, protectedPaths: contract.protectedPaths,
-    checkIds: contract.checks.map(check => check.id) };
+    deliveryDirectory: selected, editablePaths: compiled.contract.editablePaths, protectedPaths: compiled.contract.protectedPaths,
+    taskIR: compiled.taskIR, deploymentContract: compiled.contract, checkIds: compiled.contract.checkIds };
 }

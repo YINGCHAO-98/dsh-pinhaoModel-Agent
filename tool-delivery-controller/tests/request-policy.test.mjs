@@ -1,38 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSingleHtmlCreation, isSingleHtmlContract, installRequestPolicy, workerFailure, completeHtmlDraft, findReusableAnimationPlan } from '../request-policy.mjs';
-test('HTML compute routing is narrow and does not alter explicit high reasoning or other models', async () => {
-  assert.ok(isSingleHtmlCreation('创建一个单html，SVG 绘制鹈鹕骑车2D动画。不使用技能，不验证。'));
-  assert.equal(isSingleHtmlCreation('创建一个单html动画，包含支付与后端数据库'), false);
-  assert.equal(isSingleHtmlCreation('修复大型工程'), false);
+import { isSingleHtmlContract, workerFailure, completeHtmlDraft } from '../request-policy.mjs';
+test('single HTML is identified only by its delivery contract and does not alter the model route', () => {
   assert.ok(isSingleHtmlContract({editablePaths:['p.html'],requiredOutputs:['p.html'],checks:[{id:'single-html'}]}));
   assert.equal(isSingleHtmlContract({editablePaths:['src/'],requiredOutputs:['p.html'],checks:[{id:'single-html'}]}), false);
-  const handlers = new Map();installRequestPolicy({on:(event,fn)=>handlers.set(event,fn)},{});
-  let events = [{seq:1,type:'user/message',data:{source:{kind:'user'},content:[{type:'text',text:'创建一个单html，SVG鹈鹕动画'}]}}];
-  const agent={options:{reasoningEffort:'low'},session:{id:'root',header:{},snapshotEvents:()=>events}};
-  const request = config=>handlers.get('agent/request')({agent},async()=>config);
-  const base={provider:'doubao',model:'deepseek-v4-1-flash',reasoningEffort:'low'};
-  const initial = events;events=[];assert.equal((await request(base)).reasoningEffort,'low');
-  events=[{seq:0,type:'agent/inbox/spliced',data:{inserted:[initial[0].data]}}];
-  assert.equal((await request(base)).reasoningEffort,'off');
-  events=initial;
-  assert.equal((await request(base)).reasoningEffort,'off');
-  assert.equal((await request({...base,reasoningEffort:'off'})).reasoningEffort,'off');
-  events=[{seq:2,type:'user/message',data:{source:{kind:'user'},content:[{type:'text',text:'设计一个复杂数据库系统'}]}}];
-  assert.equal((await request({...base,reasoningEffort:'off'})).reasoningEffort,'low');
-  events[0].data.content[0].text='创建一个单html，SVG鹈鹕动画';
-  agent.options.reasoningEffort='high';
-  assert.equal((await request({...base,reasoningEffort:'high'})).reasoningEffort,'high');
-  agent.options.reasoningEffort='low';
-  assert.equal((await request({...base,model:'kimi-k2.7-code'})).reasoningEffort,'low');
-  agent.session.header.parentSession='parent';
-  assert.equal((await request(base)).reasoningEffort,'low');
-});
-test('only an accepted animation report can suppress duplicate planning', () => {
-  const accepted = { capability: 'animation_planning', status: 'passed', artifactRef: 'report:accepted' };
-  assert.equal(findReusableAnimationPlan([{ ...accepted, status: 'blocked' }, accepted]), accepted);
-  assert.equal(findReusableAnimationPlan([{ capability: 'quality_review', status: 'passed', artifactRef: 'report:quality' }]), null);
-  assert.equal(findReusableAnimationPlan([{ capability: 'animation_planning', status: 'passed', reportPath: '/private/report.json' }]), null);
 });
 test('worker failure preserves runtime diagnostic and classifies provider cooldowns', () => {
   const fail = error => workerFailure({stopReason:'error'},{localAgent:{session:{snapshotEvents:()=>[{type:'turn/end',data:{reason:{kind:'error',error}}}]}}});
@@ -64,6 +35,21 @@ test('draft handoff requires a successful real write receipt for the contracted 
   assert.equal(completeHtmlDraft(workspace,result('valid')),true);
   assert.deepEqual(await workspace.draftReady.promise,{draft:true});
   assert.equal(workspace.handoffPending,true);assert.deepEqual(workspace.allowedTools,[]);
+});
+
+test('HTML chunks hand off only after the successful finish tool result', async () => {
+  const workspace = { draftReady: Promise.withResolvers(), expectedOutput: '/workspace/p.html',
+    allowedTools: ['read', 'html_chunk'], execution: [] };
+  const result = (callId, isError = false) => ({ type: 'tool/result', data: {
+    message: { source: { callId }, content: [{ isError }] },
+  } });
+  workspace.execution.push({ callId: 'first', tool: 'html_chunk', action: 'append', ok: true });
+  assert.equal(completeHtmlDraft(workspace, result('first')), false);
+  workspace.execution.push({ callId: 'last', tool: 'html_chunk', action: 'finish', ok: true });
+  assert.equal(completeHtmlDraft(workspace, result('last', true)), false);
+  assert.equal(completeHtmlDraft(workspace, result('last')), true);
+  assert.deepEqual(await workspace.draftReady.promise, { draft: true });
+  assert.deepEqual(workspace.allowedTools, []);
 });
 
 test('quality response excludes repeated execution payload but preserves decision and report link', async () => {

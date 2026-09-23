@@ -1,4 +1,6 @@
-import { mkdtemp, mkdir, rm, realpath, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, realpath, lstat, readdir, open, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,11 +10,17 @@ import { nativeTools } from './native-tools.mjs';
 
 export const rootFileTools = ['read', 'write', 'edit', 'glob', 'grep'];
 export const workerTools = ['read', 'write', 'edit', 'glob', 'grep', 'bash'];
+const HTML_CHUNK_BYTES = 8192;
+const HTML_MAX_BYTES = 512 * 1024;
+const HTML_MAX_CHUNKS = 128;
 const helper = fileURLToPath(new URL('./worker-helper.mjs', import.meta.url));
 
 export function resolveToolPath(session, input) {
   if (typeof input !== 'string' || !input) throw new Error('Tool path must be a non-empty string');
-  let value = input;
+  // Models sometimes copy a Markdown-rendered path (`BUSINESS\_RULES.md`) back
+  // into a tool argument. Backslashes are not valid project path separators in
+  // this runtime, so decode only Markdown punctuation escapes before resolving.
+  let value = input.replace(/\\([_*\[\]()#])/gu, '$1');
   // Stable virtual roots avoid coupling model calls to randomized temporary
   // directories. These are aliases, not host filesystem roots.
   value = value.replace(/^\/(workspace|scratch)(?=\/|$)/u,
@@ -28,6 +36,30 @@ export function resolveToolPath(session, input) {
   const boundary = isWithin(target, session.root) ? session.root : isWithin(target, session.scratch) ? session.scratch : null;
   if (!boundary) throw new Error(`WORKER_PATH_OUTSIDE: Path ${JSON.stringify(input)} is outside the task workspace. Use a workspace-relative path, /workspace/..., or $TMPDIR/... for temporary files.`);
   return { target, boundary };
+}
+
+const ignoredLookupDirectories = new Set(['.git', 'node_modules', '.delivery']);
+export async function recoverReadPath(root, target, maxEntries = 5000) {
+  try { await lstat(target); return { target, recovered: false, candidates: [] }; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const requested = relative(root, target);
+  if (!requested || requested.startsWith('..')) return { target, recovered: false, candidates: [] };
+  const candidates = [];
+  let visited = 0;
+  async function walk(directory, prefix = '') {
+    if (visited >= maxEntries || candidates.length > 1) return;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (++visited > maxEntries || candidates.length > 1) return;
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (!ignoredLookupDirectories.has(entry.name)) await walk(resolve(directory, entry.name), path);
+      } else if (entry.isFile() && (path === requested || path.endsWith('/' + requested))) candidates.push(path);
+    }
+  }
+  await walk(root);
+  return { target: candidates.length === 1 ? resolve(root, candidates[0]) : target,
+    recovered: candidates.length === 1, candidates };
 }
 
 export function workspaceProposal(before, after, summary, contract) {
@@ -47,68 +79,36 @@ export function workspaceProposal(before, after, summary, contract) {
 
 export class WorkerWorkspaces {
   sessions = new Set();
-  rootProtections = new Map();
-  animationTurns = new Map();
   noSkillTurns = new Set();
   terminalDeliveryTurns = new Map();
   constructor(config) { this.config = config; }
   beginRootTurn(owner, text) {
-    this.clearRootProtection(owner);
     this.noSkillTurns.delete(owner);
     this.terminalDeliveryTurns.delete(owner);
     if (typeof text !== 'string') return;
-    const animation = /(?:动画|动效|分镜|镜头|帧动画|animation|animated|animate|motion|storyboard)/iu.test(text);
-    // A workflow-only follow-up still belongs to the preceding animation request.
-    // Keep the route guard so splitting the request across messages cannot turn
-    // an isolated delivery into an unrestricted root write.
-    const workflowModifier = /(?:不|无需|不要|跳过|取消|禁用|without|skip|disable|no\s+)/iu.test(text)
-      && /(?:skill|技能|验证|校验|检查|测试|审查|verification|validation|test|review)/iu.test(text);
-    if (animation) this.animationTurns.set(owner, text);
-    else if (!workflowModifier) this.animationTurns.delete(owner);
     if (/(?:不使用|不要使用|禁用|跳过|without|disable|skip|no)\s*(?:任何\s*)?(?:skill|技能)/iu.test(text))
       this.noSkillTurns.add(owner);
   }
   assertSkillAllowed(owner) {
     if (this.noSkillTurns.has(owner)) throw new Error('SKILL_DISABLED_BY_USER: the current user request explicitly disables skills');
   }
-  animationContext(owner) { return this.animationTurns.get(owner) ?? null; }
-  protectRoot(owner, path) {
-    if (typeof owner !== 'string' || !owner || typeof path !== 'string' || !path) throw new Error('Invalid root protection');
-    const paths = this.rootProtections.get(owner) ?? new Set();
-    paths.add(path); this.rootProtections.set(owner, paths);
-  }
-  clearRootProtection(owner) { this.rootProtections.delete(owner); }
   blockTerminalDeliveryTurn(owner, delivery) {
     if (typeof owner !== 'string' || !owner || !delivery?.id || !delivery?.reasonCode)
       throw new Error('Invalid terminal delivery turn');
-    this.terminalDeliveryTurns.set(owner, { id: delivery.id, reasonCode: delivery.reasonCode });
+    this.terminalDeliveryTurns.set(owner, { id: delivery.id, state: delivery.state, reasonCode: delivery.reasonCode });
   }
   terminalDeliveryBlock(owner) { return this.terminalDeliveryTurns.get(owner) ?? null; }
-  assertRootQuestionAllowed(owner) {
+  assertRootMutationAllowed(owner) {
     const terminal = this.terminalDeliveryBlock(owner);
-    if (terminal) throw new Error(`TERMINAL_DELIVERY_DECISION_DENIED: delivery ${terminal.id} ended with ${terminal.reasonCode}; report the failure directly and wait for a new user request`);
-    if (this.rootProtections.get(owner)?.size)
-      throw new Error('CONTROLLED_DELIVERY_QUESTION_DENIED: the controller owns this animation delivery and handles actionable conflicts itself');
+    if (terminal) throw new Error(`TERMINAL_DELIVERY_MUTATION_DENIED: delivery ${terminal.id} ended with ${terminal.reasonCode}; report the terminal result and wait for a new user request`);
   }
   assertRootDeliveryStartAllowed(owner) {
     const terminal = this.terminalDeliveryBlock(owner);
-    if (terminal) throw new Error(`TERMINAL_DELIVERY_RESTART_DENIED: delivery ${terminal.id} ended with ${terminal.reasonCode}; do not retry or replace it in the same user turn`);
+    if (terminal) throw new Error(`TERMINAL_DELIVERY_RESTART_DENIED: delivery ${terminal.id} ended with ${terminal.reasonCode}; report the terminal result and wait for a new user request`);
   }
   resetRootState(owner) {
-    this.clearRootProtection(owner);
-    this.animationTurns.delete(owner);
     this.noSkillTurns.delete(owner);
     this.terminalDeliveryTurns.delete(owner);
-  }
-  assertRootMutationAllowed(owner, cwd, name, args) {
-    if (!['write', 'edit'].includes(name)) return;
-    if (this.animationTurns.has(owner) && typeof args?.file_path === 'string' && /\.html?$/iu.test(args.file_path))
-      throw new Error('ANIMATION_ROUTE_REQUIRED: SVG/HTML animation must use delivery_start so Doubao planning and controlled implementation cannot be skipped');
-    const paths = this.rootProtections.get(owner);
-    if (!paths?.size || typeof args?.file_path !== 'string') return;
-    const target = resolve(cwd, args.file_path);
-    if ([...paths].some(path => target === resolve(cwd, path)))
-      throw new Error('CONTROLLED_ANIMATION_PATH: this animation output is reserved for the controlled planning -> implementation -> delivery route until the next user turn');
   }
   async open(files, parent, signal, deliveryDirectory) {
     if ((this.config.sandbox?.backend ?? (process.platform === 'darwin' ? 'seatbelt' : 'docker')) !== 'seatbelt' || process.platform !== 'darwin')
@@ -162,6 +162,7 @@ export class WorkerWorkspaces {
   }
   async invoke(name, args, exec) {
     if (!exec.agent?.session.header.parentSession) {
+      if (['write', 'edit'].includes(name)) throw new Error('ROOT_IMPLEMENTATION_NOT_ALLOWED: use the Kimi implementation worker');
       if (!rootFileTools.includes(name)) throw new Error('ROOT_TOOL_NOT_ALLOWED: only file tools are enabled');
       const cwd = exec.agent?.session.header.cwd;
       if (!cwd) throw new Error('Session has no workspace');
@@ -169,7 +170,7 @@ export class WorkerWorkspaces {
         throw new Error('Root file tools require macOS Seatbelt');
       exec.signal.throwIfAborted();
       const root = await realpath(cwd);
-      this.assertRootMutationAllowed(exec.agent.session.id, root, name, args);
+      if (['write', 'edit'].includes(name)) this.assertRootMutationAllowed(exec.agent.session.id);
       const scratch = await realpath(await mkdtemp(resolve(tmpdir(), 'pinhaomo-root-')));
       const session = { root, scratch, projectRoot: root, projectRoots: [resolve(cwd), root], signal: exec.signal, tail: Promise.resolve(), execution: [] };
       try { return await this.invokeSession(session, name, args, exec); }
@@ -177,11 +178,58 @@ export class WorkerWorkspaces {
     }
     return this.invokeSession(this.find(exec), name, args, exec);
   }
+  async htmlChunk(args, exec) {
+    const session = this.find(exec);
+    if (!session.draftReady || !session.expectedOutput || !session.allowedTools?.includes('html_chunk'))
+      throw new Error('HTML_CHUNK_NOT_ALLOWED: only the single-HTML Kimi Worker may submit chunks');
+    const operation = session.tail.then(async () => {
+      session.signal.throwIfAborted(); exec.signal.throwIfAborted();
+      if (session.closed || session.handoffPending || session.htmlChunks?.finished)
+        throw new Error('HTML_DRAFT_HANDED_OFF: draft is already finalized');
+      if (!args || !['append', 'finish'].includes(args.action)
+        || !Number.isSafeInteger(args.index) || args.index !== (session.htmlChunks?.nextIndex ?? 0))
+        throw new Error('HTML_CHUNK_SEQUENCE: expected the next sequential chunk index');
+      const state = session.htmlChunks ??= { nextIndex: 0, bytes: 0 };
+      if (args.action === 'append') {
+        const bytes = typeof args.content === 'string' ? Buffer.byteLength(args.content) : 0;
+        if (!bytes || bytes > HTML_CHUNK_BYTES || state.nextIndex >= HTML_MAX_CHUNKS
+          || state.bytes + bytes > HTML_MAX_BYTES)
+          throw new Error('HTML_CHUNK_LIMIT: chunk must be 1..8192 bytes; total must stay within 512 KiB and 128 chunks');
+        const file = await open(session.expectedOutput,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW
+            | (state.nextIndex === 0 ? constants.O_TRUNC : constants.O_APPEND), 0o600);
+        try {
+          const target = await file.stat();
+          if (!target.isFile() || target.size !== state.bytes)
+            throw new Error('HTML_CHUNK_TARGET_CHANGED: draft changed outside chunk submissions');
+          await file.writeFile(args.content);
+        } finally { await file.close(); }
+        state.nextIndex++;
+        state.bytes += bytes;
+        session.execution.push({ tool: 'html_chunk', callId: exec.callId, action: 'append', index: args.index,
+          bytes, ok: true, at: new Date().toISOString() });
+        return { accepted: true, nextIndex: state.nextIndex, bytes: state.bytes };
+      }
+      if (args.content !== undefined || state.nextIndex === 0)
+        throw new Error('HTML_CHUNK_FINISH: submit at least one chunk; finish has no content');
+      const content = await readFile(session.expectedOutput);
+      if (content.length !== state.bytes) throw new Error('HTML_CHUNK_TARGET_CHANGED: draft changed outside chunk submissions');
+      const sha256 = createHash('sha256').update(content).digest('hex');
+      state.finished = true;
+      session.execution.push({ tool: 'html_chunk', callId: exec.callId, action: 'finish', index: args.index,
+        bytes: state.bytes, sha256, ok: true, at: new Date().toISOString() });
+      return { accepted: true, finalized: true, chunks: state.nextIndex, bytes: state.bytes, sha256 };
+    });
+    session.tail = operation.catch(error => { session.execution?.push({ tool: 'html_chunk', callId: exec.callId,
+      action: args?.action, ok: false, error: String(error.message), at: new Date().toISOString() }); });
+    return operation;
+  }
   async invokeSession(session, name, args, exec) {
     const operation = session.tail.then(async () => {
       session.signal.throwIfAborted(); exec.signal.throwIfAborted();
       if (session.closed) throw new Error('Worker workspace expired');
-      if (session.handoffPending) throw new Error('HTML_DRAFT_HANDED_OFF: further implementation calls are revoked');
+      if (session.handoffPending || session.htmlChunks?.finished)
+        throw new Error('HTML_DRAFT_HANDED_OFF: further implementation calls are revoked');
       if (session.execution.length >= (session.maxToolCalls ?? 128))
         throw new Error(`Specialist tool-call budget exhausted (${session.maxToolCalls ?? 128})`);
       if (session.readOnly && ['write', 'edit'].includes(name)) throw new Error('Specialist workspace is read-only');
@@ -190,7 +238,13 @@ export class WorkerWorkspaces {
       if (name === 'bash' && typeof bounded.command === 'string' && /(?:^|\s|['"])\/(?:private\/)?tmp\//u.test(bounded.command))
         throw new Error('WORKER_TEMP_PATH_REQUIRED: /tmp is outside this isolated task. Use $TMPDIR/... or /scratch/... so the command runs in the owned scratch directory.');
       for (const key of ['file_path', 'path', 'workdir']) if (typeof bounded[key] === 'string') {
-        const { target, boundary } = resolveToolPath(session, bounded[key]);
+        let { target, boundary } = resolveToolPath(session, bounded[key]);
+        if (name === 'read' && key === 'file_path' && boundary === session.root) {
+          const lookup = await recoverReadPath(session.root, target);
+          if (lookup.recovered) target = lookup.target;
+          else if (lookup.candidates.length > 1) throw new Error(
+            `WORKER_READ_AMBIGUOUS: ${JSON.stringify(bounded[key])} is missing and matches multiple workspace files: ${lookup.candidates.join(', ')}`);
+        }
         // Reject symlink paths even when they resolve back inside the workspace.
         let current = boundary;
         for (const part of relative(boundary, target).split('/').filter(Boolean)) {
@@ -200,6 +254,9 @@ export class WorkerWorkspaces {
         }
         bounded[key] = target;
       }
+      if (session.htmlChunks?.nextIndex && (name === 'edit'
+        || name === 'write' && bounded.file_path !== session.expectedOutput))
+        throw new Error('HTML_CHUNK_MODE: only a full write to the declared HTML target may replace a chunked draft');
       if (name === 'bash') bounded.timeoutMs = Math.min(bounded.timeoutMs ?? 30000, 60000);
       const node = await realpath(this.config.sandbox.nodeExecutable);
       const runtimePackageJson = await realpath(this.config.runtimePackageJson);
@@ -217,6 +274,8 @@ export class WorkerWorkspaces {
       let response;
       try { response = JSON.parse(result.stdout); } catch { throw new Error('Invalid isolated tool response'); }
       if (!response.ok) throw new Error(response.error);
+      if (name === 'write' && bounded.file_path === session.expectedOutput && session.htmlChunks?.nextIndex)
+        session.htmlChunks = null;
       session.execution?.push({ tool: name, callId: exec.callId, args: bounded, ok: true, at: new Date().toISOString(),
         result: JSON.stringify(response.value).slice(0, 16000), commands: response.execution ?? [] });
       return response.value;
@@ -242,4 +301,16 @@ export async function registerWorkerTools(ctx, workspaces, config) {
         execute: (args, exec) => workspaces.invoke(name, args, exec) });
     }
   } finally { await runtime.dispose(); }
+}
+
+export function registerHtmlChunkTool(ctx, workspaces) {
+  ctx.tools.register({
+    name: 'html_chunk',
+    description: 'Submit a single-HTML draft in sequential pieces. Append 1..8192 UTF-8 bytes per call with index 0,1,...; call finish with the next index after the complete document. Each append is kept in the isolated draft; finish hands the document to controller checks.',
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      action: { type: 'string', enum: ['append', 'finish'] }, index: { type: 'integer' }, content: { type: 'string' },
+    }, required: ['action', 'index'] },
+    output: { schema: { type: 'string' }, render: (_, value) => [{ type: 'text', text: value }] },
+    execute: async (args, exec) => JSON.stringify(await workspaces.htmlChunk(args, exec)),
+  });
 }
