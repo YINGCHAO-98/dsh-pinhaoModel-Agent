@@ -37,10 +37,14 @@ test('trusted HTML check rejects placeholder documents and broken script syntax'
   };
   for (const content of ['placeholder', html.replace('const frame = 0;', 'const = ;'), html.replace('<script>', '<script src="external.js">'),
     html + '<body><svg></svg></body></html>', html.replace('</html>', '</html><svg></svg>'),
-    html.replace('<svg></svg>', '<svg></svg><img src="https://example.com/pixel.png">')]) {
+    html.replace('<svg></svg>', '<svg></svg><img src="https://example.com/pixel.png">'),
+    html.replace('<svg></svg>', '<svg><circle r="10"/></style></svg>'),
+    html.replace('<head>', '<head><style>svg{display:block}</style></style>')]) {
     await writeFile(resolve(root, path), content);
     assert.notEqual(check().status, 0);
   }
+  await writeFile(resolve(root, path), html.replace('<head>', '<head><style>svg{display:block}</style>'));
+  assert.equal(check().status, 0);
   await writeFile(resolve(root, path), html.replace('const frame = 0;', 'throw new Error("must not execute page code")'));
   assert.equal(check().status, 0);
 });
@@ -56,7 +60,7 @@ test('new HTML in a project without tests is checked, reviewed and synchronized;
     t.after(() => store.close());
     let reviews = 0, checks = 0;
     const route = { model: 'fixture-quality', provider: 'fixture' };
-    const controller = new DeliveryController({ store, qualityGate: route,
+    const controller = new DeliveryController({ webReviewer: async ({ snapshot }) => ({ snapshot, status: 'passed', screenshots: [{ sha256: 'fixture' }] }), store, qualityGate: route,
       worker: async () => proposal(),
       // Fixture runner, no live model or sandbox claims. Real sandbox is tested separately.
       runner: { async preflight() {}, async check({ check, snapshot, files }) {
@@ -110,7 +114,7 @@ test('verified single HTML updates reject gross loss of drawable structure and n
   await writeFile(resolve(workspace, path), rich);
   const store = new Store(resolve(root, 'state'));
   t.after(() => store.close());
-  const delivery = new DeliveryController({ store, worker: async () => proposal(truncated), reviewPolicy: 'on_request',
+  const delivery = new DeliveryController({ webReviewer: async ({ snapshot }) => ({ snapshot, status: 'passed', screenshots: [{ sha256: 'fixture' }] }), store, worker: async () => proposal(truncated), reviewPolicy: 'on_request',
     runner: { async preflight() {}, async check({ check, snapshot }) {
       return { id: check.id, snapshot, kind: 'passed', exitCode: 0 };
     } } });

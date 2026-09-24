@@ -162,7 +162,7 @@ export class WorkerWorkspaces {
   }
   async invoke(name, args, exec) {
     if (!exec.agent?.session.header.parentSession) {
-      if (['write', 'edit'].includes(name)) throw new Error('ROOT_IMPLEMENTATION_NOT_ALLOWED: use the Kimi implementation worker');
+      if (['write', 'edit'].includes(name)) throw new Error('ROOT_IMPLEMENTATION_NOT_ALLOWED: use the GLM-5.3 implementation worker');
       if (!rootFileTools.includes(name)) throw new Error('ROOT_TOOL_NOT_ALLOWED: only file tools are enabled');
       const cwd = exec.agent?.session.header.cwd;
       if (!cwd) throw new Error('Session has no workspace');

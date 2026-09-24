@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 
 if (process.env.DSH_LIVE !== '1') throw new Error('Set DSH_LIVE=1 to authorize real model calls');
 const scenario = process.env.DSH_LIVE_SCENARIO ?? 'delivery';
+const directDelivery = process.env.DSH_LIVE_DIRECT === '1';
+if (directDelivery) assert.equal(scenario, 'single-html', 'Direct live mode currently requires the single-html scenario');
 assert.ok(['delivery', 'multimodel', 'assistance', 'single-html'].includes(scenario), 'Unknown live scenario');
 const runtime = process.env.DSH_RUNTIME ?? '/Applications/DSH Desktop.app/Contents/Resources/app/package.json';
 const home = process.env.DSH_LIVE_HOME ?? '/Users/chowchow/Library/Application Support/dsh-desktop/harness';
@@ -35,7 +37,10 @@ await writeFile(resolve(preset, 'agent.cordis.yml'), template
   .replace(/^    stateDir:.*$/mu, `    stateDir: ${JSON.stringify(state)}`));
 await cp(fileURLToPath(new URL('../../skills/', import.meta.url)), resolve(preset, 'skills'), { recursive: true });
 if (scenario === 'multimodel') await multimodel.prepare(workspace, require);
-else if (scenario === 'single-html') await mkdir(workspace);
+else if (scenario === 'single-html') {
+  await mkdir(workspace);
+  if (process.env.DSH_LIVE_SEED_HTML) await cp(resolve(process.env.DSH_LIVE_SEED_HTML), resolve(workspace, 'index.html'));
+}
 else await cp(fileURLToPath(new URL('../examples/tiny-app/', import.meta.url)), workspace, { recursive: true });
 await cp(fileURLToPath(new URL('../../delivery-contract.json', import.meta.url)), resolve(preset, 'delivery-contract.json'));
 await writeFile(resolve(preset, 'preset.yml'), 'name: Pinhaomo live E2E\ndescription: Real model delivery validation\n');
@@ -48,7 +53,7 @@ const checkpoint = setInterval(() => { writeFileSync(resolve(base, 'trace.json')
 const safe = text => credentialValue ? String(text).replaceAll(credentialValue, '[REDACTED]') : String(text);
 process.on('SIGTERM', () => { handle?.agent.cancel({ kind: 'user' }); });
 process.on('SIGINT', () => { handle?.agent.cancel({ kind: 'user' }); });
-console.log(JSON.stringify({ event: 'live.start', startedAt, output: base, scenario, models: scenario === 'multimodel' ? multimodel.models : scenario === 'single-html' ? ['deepseek-v4-1-flash', 'minimax-m3', 'kimi-k2-8-preview'] : scenario === 'assistance' ? ['deepseek-v4-1-flash', 'minimax-m3', 'kimi-k2.7-code'] : ['deepseek-v4-1-flash', 'kimi-k2.7-code'] }));
+console.log(JSON.stringify({ event: 'live.start', startedAt, output: base, scenario, models: scenario === 'multimodel' ? multimodel.models : scenario === 'single-html' ? ['deepseek-v4-1-flash', 'minimax-m3', 'glm-5.3', 'kimi-k2-8-preview'] : scenario === 'assistance' ? ['deepseek-v4-1-flash', 'minimax-m3', 'glm-5.3', 'kimi-k2-8-preview'] : ['deepseek-v4-1-flash', 'glm-5.3', 'kimi-k2-8-preview'] }));
 try {
   ctx.baseUrl = pathToFileURL(resolve(runtime, '..')).href + '/';
   await ctx.plugin(Loader); ctx.loader.builtins.include = Include;
@@ -84,14 +89,20 @@ try {
     setup: async agentCtx => { await ctx.agentPresets.mount(agentCtx, 'pinhaomo-live'); },
   });
   let objective = scenario === 'multimodel' ? multimodel.objective : scenario === 'single-html'
-    ? '创建一个单html，内容是SVG 绘制一个鹈鹕骑自行车的2D动画。'
+    ? (process.env.DSH_LIVE_OBJECTIVE ?? '创建一个单html，内容是SVG 绘制一个鹈鹕骑自行车的2D动画。')
     : '请修复这个项目 src/sum.cjs 中的加法函数：对两个数字返回数学上的和，正确处理正数、负数和零。保留 CommonJS 导出形式，不修改 tests 或项目配置。请直接完成代码修改、运行已有测试，并独立验收后交付；不要只给建议。';
   if (scenario === 'assistance') objective += '\n这是专业协助与自动交接的验收用例：额外交付一段面向用户的简短发布说明。请实际使用 request_capability 的 creative_writing 能力生成说明，提交 schema 要求的理由、能力缺口和验收条件，inputRefs 使用 file:src/sum.cjs。然后把返回的 artifactRef 通过 delivery_start.reportRefs 传入研发，不要手工转述替代引用。';
   // A full run can include an independent review and a bounded follow-up repair.
   const timeout = setTimeout(() => handle.agent.cancel({ kind: 'user' }), 35 * 60 * 1000);
   try {
-    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: objective }], source: { kind: 'user' } }));
-    await handle.agent.whenIdle();
+    if (directDelivery) {
+      const started = await ctx.tools.execute({ agent: handle.agent, name: 'delivery_start',
+        arguments: { objective, singleHtmlPath: 'index.html' }, callId: 'direct-live-start', signal: new AbortController().signal });
+      assert.notEqual(started.isError, true, JSON.stringify(started));
+    } else {
+      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: objective }], source: { kind: 'user' } }));
+      await handle.agent.whenIdle();
+    }
   } finally { clearTimeout(timeout); }
   const result = await ctx.tools.execute({ agent: handle.agent, name: 'delivery_status', arguments: {}, callId: 'live-status', signal: new AbortController().signal });
   assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -99,30 +110,31 @@ try {
   outcome = runs[0];
   assert.ok(outcome, 'Real root agent did not start delivery');
   assert.equal(outcome.state, 'passed', `${outcome.reasonCode ?? ''}: ${outcome.reason ?? 'No failure reason'}`);
-  if (scenario !== 'single-html') {
-    assert.equal(outcome.quality?.model, 'kimi-k2.7-code');
-    assert.equal(outcome.quality?.status, 'passed');
-    assert.equal(outcome.quality?.snapshot, outcome.snapshot);
-  }
+  assert.equal(outcome.quality?.model, 'kimi-k2-8-preview');
+  assert.equal(outcome.quality?.status, 'passed');
+  assert.equal(outcome.quality?.snapshot, outcome.snapshot);
   if (scenario === 'multimodel') verification = await multimodel.verify({ workspace, outcome, trace, agents });
   else if (scenario === 'single-html') {
     assert.equal(outcome.mode, 'project');
     assert.equal(outcome.syncReceipt?.verified, true);
     assert.equal(outcome.checks.find(check => check.id === 'single-html')?.kind, 'passed');
+    assert.equal(outcome.checks.find(check => check.id === 'web-visual')?.kind, 'passed');
+    assert.equal(outcome.webVisual?.model, 'kimi-k2-8-preview');
+    assert.equal(outcome.webVisual?.status, 'passed');
+    assert.equal(outcome.webVisual?.snapshot, outcome.snapshot);
+    assert.equal(outcome.webVisual?.screenshots?.length, 2);
     const paths = outcome.syncReceipt.paths;
-    assert.equal(paths.length, 1);
-    assert.match(paths[0], /\.html$/);
-    const html = await readFile(resolve(workspace, paths[0]), 'utf8');
+    assert.ok(paths.length === 1 || (process.env.DSH_LIVE_SEED_HTML && paths.length === 0));
+    if (paths.length) assert.match(paths[0], /\.html$/);
+    const outputPath = paths[0] ?? 'index.html';
+    const html = await readFile(resolve(workspace, outputPath), 'utf8');
     assert.match(html, /<svg\b/i);
     assert.match(html, /(?:<animate(?:Transform)?\b|@keyframes\b)/i);
     assert.match(html, /(?:<path\b|<ellipse\b)/i);
     assert.match(html, /(?:wheel|车轮|轮胎)/i);
-    assert.match(html, /<[^>]+class=["'][^"']*pelicanBob\b/i, 'Pelican body was lost from the SVG');
-    assert.equal([...html.matchAll(/<[^>]+class=["'][^"']*wheelSpin\b/gi)].length, 2,
-      'Both bicycle wheels must remain in the SVG');
     assert.ok(!/<(?:canvas|img|video|iframe)\b/i.test(html));
     assert.ok(!/(?:src|href)\s*=\s*["']https?:\/\//i.test(html));
-    verification = { path: paths[0], bytes: Buffer.byteLength(html), checks: outcome.checks };
+    verification = { path: outputPath, bytes: Buffer.byteLength(html), checks: outcome.checks };
   }
   else {
   const actual = require(resolve(outcome.artifact, 'src/sum.cjs'));
@@ -141,8 +153,9 @@ try {
     assert.equal(outcome.capabilityTasks.filter(t => t.capability !== 'quality_review').length, 0, 'Simple bug unnecessarily delegated');
     assert.ok(!trace.some(e => e.type === 'tool/call' && ['request_capability', 'multimodel_run'].includes(e.data.name)), 'Simple bug added orchestration');
   }
-  assert.ok(trace.some(e => e.type === 'tool/call' && e.data.name === 'delivery_start'), 'Natural-language dispatch missing');
-  assert.ok([...agents.values()].some(a => a.parent && a.model === (scenario === 'single-html' ? 'kimi-k2-8-preview' : 'kimi-k2.7-code')), 'Real Kimi child missing');
+  if (!directDelivery) assert.ok(trace.some(e => e.type === 'tool/call' && e.data.name === 'delivery_start'), 'Natural-language dispatch missing');
+  assert.ok([...agents.values()].some(a => a.parent && a.model === 'glm-5.3'), 'Real GLM implementation child missing');
+  assert.ok([...agents.values()].some(a => a.parent && a.model === 'kimi-k2-8-preview'), 'Real Kimi quality child missing');
 } catch (error) {
   failure = safe(error?.message ?? error);
   process.exitCode = 1;

@@ -1,3 +1,4 @@
+import { needsWebReview } from './web-visual.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -210,9 +211,12 @@ export class Store {
           && typeof patch.artifact === 'string' && Array.isArray(patch.syncPlan))
           || (current.state === 'blocked' && current.resumeState === 'syncing' && patch.evidence?.length === 0 && patch.quality === null)))
         throw new Error('Invalid unverified synchronization transition');
+      const webRequired = current.assurance !== 'unverified' && ['passed', 'syncing'].includes(state) && needsWebReview(this.files(current.snapshot));
+      const expectedChecks = [...current.contract.checks, ...(webRequired ? [{ id: 'web-visual' }] : [])];
+      if (webRequired && !patch.evidence?.find(e => e.id === 'web-visual')?.screenshots?.length) throw new Error('Missing browser screenshot evidence');
       if (current.assurance !== 'unverified' && ['passed', 'syncing'].includes(state) && ((!['verifying', 'syncing'].includes(current.state) && !(state === 'syncing' && current.state === 'blocked' && current.resumeState === 'syncing')) || !Array.isArray(patch.evidence)
-        || patch.evidence.length !== current.contract.checks.length
-        || patch.evidence.some((e, i) => e.id !== current.contract.checks[i].id || e.exitCode !== 0
+        || patch.evidence.length !== expectedChecks.length
+        || patch.evidence.some((e, i) => e.id !== expectedChecks[i].id || e.exitCode !== 0
           || e.kind !== 'passed' || e.snapshot !== current.snapshot))) throw new Error('Missing current verification evidence');
       if (['passed', 'syncing'].includes(state) && current.qualityGate && (patch.quality?.status !== 'passed'
         || patch.quality.snapshot !== current.snapshot || patch.quality.model !== current.qualityGate.model

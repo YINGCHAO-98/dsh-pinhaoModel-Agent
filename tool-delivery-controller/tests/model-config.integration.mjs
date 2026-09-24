@@ -36,3 +36,46 @@ test('installed adapter maps configured DeepSeek effort and output budget into t
   assert.equal(settings['agent-default-model'].model, 'kimi-k2.7-code');
   assert.equal(settings['agent-default-model'].reasoningEffort, undefined);
 });
+
+test('GLM-5.3 implementation route sends provider-accepted low reasoning effort', async () => {
+  const settings = parse(await readFile(new URL('../../host/settings.yaml', import.meta.url), 'utf8'));
+  let adapter;
+  apply({ get() {}, inject() {}, llm: {
+    registerConfigurableProviders() { return {}; }, registerModelDiscovery() {},
+    registerAdapter(_routes, value) { adapter = value; return {}; },
+  } }, settings['llm-pi-ai']);
+  const info = await adapter.resolveModel('doubao', 'glm-5.3');
+  assert.ok(info.reasoning.efforts.some(e => e.id === 'low'));
+  const model = adapter.modelOf(adapter.current(), 'doubao', 'glm-5.3');
+  let payload;
+  const stream = streamSimple(model, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] }, {
+    apiKey: 'fixture-not-a-real-key', reasoning: 'low', maxTokens: 16384,
+    onPayload(value) { payload = value; throw new Error('Captured before network'); },
+  });
+  for await (const _event of stream) {}
+  assert.deepEqual(payload.thinking, { type: 'enabled' });
+  assert.equal(payload.reasoning_effort, 'low');
+  assert.equal(payload.model, 'glm-5.3');
+});
+
+test('Kimi K2.8 quality route sends provider-accepted low reasoning effort', async () => {
+  const settings = parse(await readFile(new URL('../../host/settings.yaml', import.meta.url), 'utf8'));
+  let adapter;
+  apply({ get() {}, inject() {}, llm: {
+    registerConfigurableProviders() { return {}; }, registerModelDiscovery() {},
+    registerAdapter(_routes, value) { adapter = value; return {}; },
+  } }, settings['llm-pi-ai']);
+  const info = await adapter.resolveModel('doubao', 'kimi-k2-8-preview');
+  assert.ok(info.reasoning.efforts.some(e => e.id === 'low'));
+  const model = adapter.modelOf(adapter.current(), 'doubao', 'kimi-k2-8-preview');
+  let payload;
+  const stream = streamSimple(model, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] }, {
+    apiKey: 'fixture-not-a-real-key', reasoning: 'low', maxTokens: 8192,
+    onPayload(value) { payload = value; throw new Error('Captured before network'); },
+  });
+  for await (const _event of stream) {}
+  assert.deepEqual(payload.thinking, { type: 'enabled' });
+  assert.equal(payload.reasoning_effort, 'low');
+  assert.equal(payload.max_tokens ?? payload.max_completion_tokens, 8192);
+  assert.equal(payload.model, 'kimi-k2-8-preview');
+});

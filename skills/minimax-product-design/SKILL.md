@@ -1,6 +1,6 @@
 ---
 name: minimax-product-design
-description: 使用 MiniMax M3 形成产品、功能、交互、技术架构、实施和创意方案，作为 Kimi K2.8 编程前的设计输入。
+description: 使用 MiniMax M3 形成产品、功能、交互、技术架构、实施和创意方案，作为 GLM-5.3 编程前的设计输入。
 ---
 
 # MiniMax 产品设计与方案规划

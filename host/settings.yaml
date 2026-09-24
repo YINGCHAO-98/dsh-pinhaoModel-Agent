@@ -20,7 +20,8 @@ llm-pi-ai:
                   input: [ text, image ]
                 },
               { id: glm-5-3-flash, name: glm-5-3-flash, input: [ text, image ] },
-              { id: kimi-k2-8-preview, name: kimi-k2-8-preview }
+              { id: glm-5.3, name: glm-5.3, reasoningEfforts: { low: low }, compat: { thinkingFormat: deepseek, supportsReasoningEffort: true } },
+              { id: kimi-k2-8-preview, name: kimi-k2-8-preview, input: [ text, image ], reasoningEfforts: { low: low }, compat: { thinkingFormat: deepseek, supportsReasoningEffort: true } }
             ]
         }
     }

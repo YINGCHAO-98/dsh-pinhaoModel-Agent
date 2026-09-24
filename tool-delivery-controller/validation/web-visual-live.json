@@ -1,0 +1,228 @@
+[
+  {
+    "sample": "good",
+    "elapsedMs": 13489,
+    "status": "passed",
+    "summary": "验收通过。桌面视口（1280x800）与手机视口（390x844）的结账页面均完整可见目标内容：白色卡片内显示加粗的 \"Checkout\" 标题、\"Total $29.00\" 文本，以及蓝色 \"Pay now\" 按钮。所有文字清晰可读、字号足够、无截断、无溢出、无互相遮挡；卡片在各视口内均正常显示，布局合理。",
+    "evidence": [
+      "1280x800 截图：Checkout 标题完整显示于白色卡片左上角，Total $29.00 紧随其下，Pay now 按钮为蓝色圆角矩形、白字清晰可读，三元素均无遮挡、无溢出。",
+      "390x844 截图：移动端同样完整显示 Checkout 标题、Total $29.00 与 Pay now 按钮，文字未换行错乱、未被截断，无水平滚动溢出迹象。",
+      "两个视口下元素间距一致，按钮颜色对比度高（蓝底白字），文字可读性良好。"
+    ],
+    "limitations": [
+      "本次验收仅基于静态截图，无法验证 Pay now 按钮的点击交互、悬停/按下状态或任何动画行为。",
+      "仅覆盖了 1280x800 与 390x844 两个视口，未测试其他尺寸（如平板或更小屏）。",
+      "未检查页面在不同浏览器或不同设备像素比下的实际渲染差异。"
+    ],
+    "tool": "task_kimi_visual",
+    "provider": "doubao",
+    "model": "kimi-k2-8-preview",
+    "snapshot": "6c1d048e29893755d4bc905a6cc2d4188a57710f098e72229b95e1e3221fc89c",
+    "execution": [],
+    "tokenUsage": null,
+    "screenshots": [
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "sha256": "6133eeb91ead2ca41541686733428419a6840217735b92e8af211e82180b9095",
+        "attachment": {
+          "attachmentId": "sha256:6133eeb91ead2ca41541686733428419a6840217735b92e8af211e82180b9095",
+          "mediaType": "image/png",
+          "width": 1280,
+          "height": 800,
+          "bytes": 16044,
+          "name": "web-preview.png"
+        }
+      },
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sha256": "b0b461056aa367a798c30bcb01c027a52bdcf246315af6e28c4ea971fbd420af",
+        "attachment": {
+          "attachmentId": "sha256:b0b461056aa367a798c30bcb01c027a52bdcf246315af6e28c4ea971fbd420af",
+          "mediaType": "image/png",
+          "width": 390,
+          "height": 844,
+          "bytes": 13184,
+          "name": "web-preview.png"
+        }
+      }
+    ]
+  },
+  {
+    "sample": "broken",
+    "elapsedMs": 20781,
+    "status": "failed",
+    "summary": "验收未通过。桌面视口（1280x800）与手机视口（390x844）中都能看到白色卡片内的 \"Checkout\" 标题和 \"Total $29.00\" 文本，且文字清晰、无溢出、无互相遮挡。但两个视口内均完全看不到目标要求的 \"Pay now\" 按钮：卡片下方在两种尺寸下都有大片空白区域（桌面截图约 560px、手机截图约 600px 的空白），说明按钮并非因视口高度被挤到首屏下方，而是页面渲染结果中就没有可见的 Pay now 按钮。因此不满足\"桌面和手机视口都应完整看到可读的 Pay now 按钮\"的验收条件。",
+    "evidence": [
+      "桌面截图（index.html, 1280x800, sha256:0a5eb5...555d124）：可见 'Checkout' 标题与 'Total $29.00'，文字清晰无遮挡；整个视口内没有任何 Pay now 按钮，卡片底部（约 y=244）以下大片空白。",
+      "手机截图（index.html, 390x844, sha256:c9a1e3de...f3635cd8e）：同样只显示 'Checkout' 与 'Total $29.00'，无 Pay now 按钮，卡片下方约 600px 空白，证明按钮不是被首屏裁掉而是未渲染。",
+      "两个视口均无内容溢出或元素互相遮挡，标题与金额文本完整可读——但目标三要素之一（Pay now 按钮）在两个视口均缺失，判定 failed。"
+    ],
+    "limitations": [
+      "静态截图无法证明交互或动画：如果 Pay now 按钮依赖 JS 延迟加载、悬停或点击才显示，仅凭截图无法确认；本报告仅基于两张静态截图的可见内容。",
+      "仅提供了 1280x800 和 390x844 两个视口，其他尺寸（如平板或更窄手机）的表现无法判断。",
+      "无法读取源码或运行时状态，不能断定按钮缺失的具体原因（未渲染、被隐藏、加载失败等）。"
+    ],
+    "tool": "task_kimi_visual",
+    "provider": "doubao",
+    "model": "kimi-k2-8-preview",
+    "snapshot": "50f300b9e4b98771015d3f238d52f36f60cc724a2dda2f0d932e477a4ff21b97",
+    "execution": [],
+    "tokenUsage": null,
+    "screenshots": [
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "sha256": "0a5eb5ea4e28541831296d5a626a1342f1a2ac5e6efb52d90bc1be484555d124",
+        "attachment": {
+          "attachmentId": "sha256:0a5eb5ea4e28541831296d5a626a1342f1a2ac5e6efb52d90bc1be484555d124",
+          "mediaType": "image/png",
+          "width": 1280,
+          "height": 800,
+          "bytes": 13024,
+          "name": "web-preview.png"
+        }
+      },
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sha256": "c9a1e3dec6436fa49b1a5873378bb0e0a33ac1e928faad5d97faf44f3635cd8e",
+        "attachment": {
+          "attachmentId": "sha256:c9a1e3dec6436fa49b1a5873378bb0e0a33ac1e928faad5d97faf44f3635cd8e",
+          "mediaType": "image/png",
+          "width": 390,
+          "height": 844,
+          "bytes": 10332,
+          "name": "web-preview.png"
+        }
+      }
+    ]
+  },
+  {
+    "sample": "good",
+    "elapsedMs": 43575,
+    "evidence": [
+      "桌面视口截图 index.html 1280x800（sha256:6133eeb91ead2ca41541686733428419a6840217735b92e8af211e82180b9095）：左上白色卡片内完整显示黑色粗体大标题 Checkout、Total $29.00 一行、蓝色圆角 Pay now 按钮（白字清晰可读）；三者无重叠、无溢出，文字未被裁切，按钮完整落在卡片内。",
+      "移动视口截图 index.html 390x844（sha256:b0b461056aa367a798c30bcb01c027a52bdcf246315af6e28c4ea971fbd420af）：卡片近满宽且左右留有边距，Checkout 标题完整显示未被截断，Total $29.00 与 Pay now 按钮均完整可见、无遮挡无溢出，按钮文字对比度良好可读。",
+      "两个视口下卡片下方均为浅灰空白背景，未见横向滚动条迹象或元素被视口边缘裁切；两个尺寸均满足“标题、金额、按钮完整可见且互不遮挡”的验收标准。"
+    ],
+    "limitations": [
+      "静态截图只能验证当前渲染帧：无法证明 Pay now 按钮的点击/支付流程、悬停、聚焦等交互与动画行为正确。",
+      "仅覆盖 1280x800 与 390x844 两个视口，未验证其他断点或更小屏幕下的表现。",
+      "截图内容不超出首屏，无法据此判断页面在更小高度视口下滚动后的表现。",
+      "桌面视口中卡片靠左占约半宽、右侧留大片空白，属于布局观感问题，不在本次验收标准（完整可见、无溢出、无遮挡）的失败项内，仅作记录。"
+    ],
+    "status": "passed",
+    "summary": "结账页面验收通过。依据控制器提供的真实浏览器截图逐项核对验收目标：桌面视口（1280x800）截图中，白色卡片内完整显示黑色粗体大标题「Checkout」、一行「Total $29.00」以及蓝底白字的「Pay now」按钮，三者均完整可见、互不遮挡、无溢出或被裁切，文字对比度良好可读；移动视口（390x844）截图中，卡片近乎占满宽度且两侧留边，「Checkout」「Total $29.00」「Pay now」同样完整显示，无重叠、无溢出，按钮及文字清晰可读。两个视口均未发现横向溢出、滚动条或元素被视口边缘截断的迹象。另记录一处非阻断性观察：桌面视口下卡片靠左对齐、右侧留有大面积空白，属布局观感问题，不影响本次验收标准（关键内容完整可见且互不遮挡），未判为失败。",
+    "tool": "task_kimi_visual",
+    "provider": "doubao",
+    "model": "glm-5-3-flash",
+    "snapshot": "6c1d048e29893755d4bc905a6cc2d4188a57710f098e72229b95e1e3221fc89c",
+    "execution": [],
+    "tokenUsage": null,
+    "screenshots": [
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "sha256": "6133eeb91ead2ca41541686733428419a6840217735b92e8af211e82180b9095",
+        "attachment": {
+          "attachmentId": "sha256:6133eeb91ead2ca41541686733428419a6840217735b92e8af211e82180b9095",
+          "mediaType": "image/png",
+          "width": 1280,
+          "height": 800,
+          "bytes": 16044,
+          "name": "web-preview.png"
+        }
+      },
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sha256": "b0b461056aa367a798c30bcb01c027a52bdcf246315af6e28c4ea971fbd420af",
+        "attachment": {
+          "attachmentId": "sha256:b0b461056aa367a798c30bcb01c027a52bdcf246315af6e28c4ea971fbd420af",
+          "mediaType": "image/png",
+          "width": 390,
+          "height": 844,
+          "bytes": 13184,
+          "name": "web-preview.png"
+        }
+      }
+    ]
+  },
+  {
+    "sample": "broken",
+    "elapsedMs": 57125,
+    "evidence": [
+      "桌面截图 1280x800（sha256:0a5eb5ea4e28541831296d5a626a1342f1a2ac5e6efb52d90bc1be484555d124）：白色卡片内可见黑色加粗 “Checkout” 标题（完整、无遮挡、对比度良好）与 “Total $29.00” 文本（清晰可读）；但卡片下方及整个视口剩余区域均为空白灰底，未出现任何 “Pay now” 按钮或按钮样式元素；视口最底部（约 y≈790–800，x≈120–1280）有一条深色横带，疑似水平滚动条或被视口底边截断的元素，提示可能存在横向溢出。",
+      "移动截图 390x844（sha256:c9a1e3dec6436fa49b1a5873378bb0e0a33ac1e928faad5d97faf44f3635cd8e）：白色卡片内 “Checkout” 标题与 “Total $29.00” 均完整可见、文字清晰；卡片下方至视口底部全部为空白灰底，同样未出现任何 “Pay now” 按钮；未见明显的横向溢出或元素重叠。",
+      "两份截图共同结论：目标明确要求两个视口都能看到可读的 Pay now 按钮，但该按钮在两张截图中均缺失，核心验收项不满足。"
+    ],
+    "limitations": [
+      "静态截图无法验证交互行为：按钮点击、表单提交、悬停状态、动画或滚动后的内容均未测试，无法据此判断其正确性。",
+      "截图为视口高度（800px/844px）的首屏画面：若 Pay now 按钮位于需滚动才能到达的首屏以下，仅凭静态截图无法确认其存在与否；但按目标表述（两个视口都应完整看到标题、金额与按钮）以及页面无可见纵向滚动条迹象，判定当前首屏未满足要求。",
+      "桌面截图底部深色横带的确切成因（水平滚动条、被截断的元素或截图边缘伪影）无法从静态截图确定，需进一步复核。",
+      "本次仅基于控制器提供的两张真实截图做视觉判断，未读取或运行页面源码；仅覆盖 1280x800 与 390x844 两个尺寸，不能代表所有设备与浏览器环境。"
+    ],
+    "status": "failed",
+    "summary": "验收失败。桌面（1280x800）与移动（390x844）两份截图中，白色卡片内的 “Checkout” 标题（黑色加粗、完整无截断）与 “Total $29.00” 文本均清晰可读、无相互遮挡；但两个视口的可见区域内都没有出现任何 “Pay now” 按钮——卡片下方及页面其余部分全部是空白灰底，不满足目标中“两个视口都应看到可读的 Pay now 按钮”这一硬性要求。此外，桌面截图视口最底部（约 y≈790–800，从 x≈120 延伸到右边缘）出现一条深色横带，疑似水平滚动条或被视口底边裁切的元素，提示页面可能存在横向溢出或被截断的内容，需一并复核。综上返回 failed：缺失必需的 Pay now 按钮（两种视口均如此），并存在疑似溢出/裁切迹象。",
+    "tool": "task_kimi_visual",
+    "provider": "doubao",
+    "model": "glm-5-3-flash",
+    "snapshot": "50f300b9e4b98771015d3f238d52f36f60cc724a2dda2f0d932e477a4ff21b97",
+    "execution": [],
+    "tokenUsage": null,
+    "screenshots": [
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "sha256": "0a5eb5ea4e28541831296d5a626a1342f1a2ac5e6efb52d90bc1be484555d124",
+        "attachment": {
+          "attachmentId": "sha256:0a5eb5ea4e28541831296d5a626a1342f1a2ac5e6efb52d90bc1be484555d124",
+          "mediaType": "image/png",
+          "width": 1280,
+          "height": 800,
+          "bytes": 13024,
+          "name": "web-preview.png"
+        }
+      },
+      {
+        "entry": "index.html",
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "sha256": "c9a1e3dec6436fa49b1a5873378bb0e0a33ac1e928faad5d97faf44f3635cd8e",
+        "attachment": {
+          "attachmentId": "sha256:c9a1e3dec6436fa49b1a5873378bb0e0a33ac1e928faad5d97faf44f3635cd8e",
+          "mediaType": "image/png",
+          "width": 390,
+          "height": 844,
+          "bytes": 10332,
+          "name": "web-preview.png"
+        }
+      }
+    ]
+  }
+]

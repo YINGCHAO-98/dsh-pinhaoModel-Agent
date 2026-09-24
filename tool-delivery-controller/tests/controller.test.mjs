@@ -358,7 +358,7 @@ test('startup recovery converts orphaned active execution into an explicit resum
   assert.equal(f.store.history(run.id).at(-1).kind, 'interrupted.recovered');
 });
 
-const qualityGate = { toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2.7-code' };
+const qualityGate = { toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2-8-preview' };
 const qualityReport = (snapshot, status = 'passed') => ({ ...qualityGate, snapshot, status,
   summary: 'independent review', evidence: ['node --test: reviewed'], limitations: [] });
 
@@ -374,7 +374,7 @@ test('independent quality failure triggers repair even when contract tests pass'
   assert.equal(reviews, 2);
   assert.ok(inputs[1].evidence.some(e => e.id === 'independent-quality' && e.status === 'failed'));
   assert.equal(inputs[1].evidence.find(e => e.id === 'independent-quality').execution, undefined);
-  assert.equal(result.quality.model, 'kimi-k2.7-code');
+  assert.equal(result.quality.model, 'kimi-k2-8-preview');
   assert.equal(result.quality.snapshot, result.snapshot);
 });
 

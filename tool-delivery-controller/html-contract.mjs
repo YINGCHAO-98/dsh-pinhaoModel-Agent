@@ -39,6 +39,13 @@ function checkHtml(path) {
     && close('body') < close('html'), 'HTML document sections are out of order');
   assert.match(html.slice(close('html')), /^<\/html\s*>\s*$/i, 'Content follows the closing HTML tag');
   assert.equal(count(/<svg\b/gi), count(/<\/svg\s*>/gi), 'SVG opening and closing tags must balance');
+  const styleOpens = [...html.matchAll(/<style\b[^>]*>/gi)].map(match => match.index);
+  const styleCloses = [...html.matchAll(/<\/style\s*>/gi)].map(match => match.index);
+  assert.equal(styleOpens.length, styleCloses.length, 'Style opening and closing tags must balance');
+  for (let i = 0; i < styleOpens.length; i++) {
+    assert.ok(styleOpens[i] < styleCloses[i] && (i === 0 || styleCloses[i - 1] < styleOpens[i]),
+      'Style tags must occur in opening/closing pairs');
+  }
   assert.ok(!/<(?:script|link|img|source|video|audio|iframe|image|use)\b[^>]*(?:src|href|xlink:href)\s*=\s*["']?https?:\/\//i.test(html)
     && !/@import\b|url\(\s*["']?https?:\/\//i.test(html), 'External resources are not allowed in a self-contained HTML file');
   for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {

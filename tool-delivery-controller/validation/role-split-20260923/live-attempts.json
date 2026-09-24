@@ -1,0 +1,114 @@
+[
+  {
+    "startedAt": "2026-09-23T04:33:10.241Z",
+    "status": "failed",
+    "models": [
+      "deepseek-v4-1-flash",
+      "glm-5.3",
+      "minimax-m3"
+    ],
+    "deliveryState": "failed",
+    "reasonCode": "WORKER_TIMEOUT_RETRIES_EXHAUSTED",
+    "reason": "Worker timeout recovery exhausted after one automatic retry: Worker reached the first-tool deadline without calling a tool",
+    "modelRequests": 11,
+    "failure": "WORKER_TIMEOUT_RETRIES_EXHAUSTED: Worker timeout recovery exhausted after one automatic retry: Worker reached the first-tool deadline without calling a tool\n\n'failed' !== 'passed'\n"
+  },
+  {
+    "startedAt": "2026-09-23T04:38:45.406Z",
+    "status": "failed",
+    "models": [
+      "deepseek-v4-1-flash",
+      "glm-5.3",
+      "minimax-m3"
+    ],
+    "deliveryState": "blocked",
+    "reasonCode": null,
+    "reason": "429: {\"code\":\"AccountQuotaExceeded\",\"message\":\"You have exceeded the weekly usage quota. It will reset at 2026-09-28 00:00:00 +0800 CST. We recommend upgrading your plan for more quota, or waiting for the reset. Request id: 021790138672742a28a523199212da973704da21f2917eb60e0c3\",\"param\":\"\",\"type\":\"TooManyRequests\"}",
+    "modelRequests": 7,
+    "failure": ": 429: {\"code\":\"AccountQuotaExceeded\",\"message\":\"You have exceeded the weekly usage quota. It will reset at 2026-09-28 00:00:00 +0800 CST. We recommend upgrading your plan for more quota, or waiting for the reset. Request id: 021790138672742a28a523199212da973704da21f2917eb60e0c3\",\"param\":\"\",\"type\":\"TooManyRequests\"}\n+ actual - expected\n\n+ 'blocked'\n- 'passed'\n"
+  },
+  {
+    "startedAt": "2026-09-23T05:40:34.461Z",
+    "status": "failed",
+    "models": [
+      "deepseek-v4-1-flash",
+      "glm-5.3",
+      "minimax-m3"
+    ],
+    "deliveryState": "blocked",
+    "reasonCode": null,
+    "reason": "400: {\"code\":\"InvalidParameter\",\"message\":\"thinking.type `disabled` is not supported by this model Request id: 0217901421506620730b6660d857180baac0c56a1cd6448daf02d\",\"param\":\"\",\"type\":\"BadRequest\"}",
+    "modelRequests": 15,
+    "failure": ": 400: {\"code\":\"InvalidParameter\",\"message\":\"thinking.type `disabled` is not supported by this model Request id: 0217901421506620730b6660d857180baac0c56a1cd6448daf02d\",\"param\":\"\",\"type\":\"BadRequest\"}\n+ actual - expected\n\n+ 'blocked'\n- 'passed'\n"
+  },
+  {
+    "startedAt": "2026-09-23T06:37:25.814Z",
+    "mode": "direct",
+    "status": "passed",
+    "deliveryState": "passed",
+    "snapshot": "a37c3c507772630f423ad069a86afad919e951053a62a2ec81b2c0dbe4c95243",
+    "modelRequests": 14,
+    "checks": [
+      {
+        "id": "single-html",
+        "kind": "passed",
+        "exitCode": 0
+      },
+      {
+        "id": "web-visual",
+        "kind": "passed",
+        "exitCode": 0
+      }
+    ],
+    "quality": {
+      "model": "kimi-k2-8-preview",
+      "status": "passed"
+    },
+    "webVisual": {
+      "model": "kimi-k2-8-preview",
+      "status": "passed",
+      "screenshots": 2
+    },
+    "syncReceipt": {
+      "verified": true,
+      "paths": [
+        "index.html"
+      ]
+    }
+  },
+  {
+    "startedAt": "2026-09-23T07:15:44.855Z",
+    "mode": "natural-language",
+    "status": "passed",
+    "deliveryState": "passed",
+    "snapshot": "8dc794c50c72b21c658fab41b072f848d12a3a27ebdabb54caba1fe52b0e751a",
+    "modelRequests": 14,
+    "checks": [
+      {
+        "id": "single-html",
+        "kind": "passed",
+        "exitCode": 0
+      },
+      {
+        "id": "web-visual",
+        "kind": "passed",
+        "exitCode": 0
+      }
+    ],
+    "quality": {
+      "model": "kimi-k2-8-preview",
+      "status": "passed"
+    },
+    "webVisual": {
+      "model": "kimi-k2-8-preview",
+      "status": "passed",
+      "screenshots": 2
+    },
+    "syncReceipt": {
+      "verified": true,
+      "paths": [
+        "index.html"
+      ]
+    }
+  }
+]

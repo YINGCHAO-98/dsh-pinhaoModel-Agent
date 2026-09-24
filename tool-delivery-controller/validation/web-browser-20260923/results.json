@@ -1,0 +1,24 @@
+{
+  "screenshots": [
+    {
+      "entry": "index.html",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "sha256": "428021e6c462b321742b40e839b990abd7acb5d392cc8692a510c47f0c3b3119"
+    },
+    {
+      "entry": "index.html",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "sha256": "3b1aca4828c434f805deb5fa210b07c606247c5c929a5163deee4610d2633a0b"
+    }
+  ],
+  "failures": [
+    "WEB_EXTERNAL_REQUEST_BLOCKED",
+    "Uncaught"
+  ]
+}

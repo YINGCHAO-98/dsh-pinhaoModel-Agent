@@ -204,7 +204,7 @@ test('no-progress recovery dispatches the configured model through the same work
   const worker = dshWorker({ subagents: { async start(_provider, input) {
     routes.push(input.agentOptions.model);
     return { id: 'recovery-child', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Recovered' } }), async dispose() {} };
-  } } }, { modelProvider: 'doubao', model: 'kimi-k2-8-preview', recoveryWorker: {
+  } } }, { modelProvider: 'doubao', model: 'glm-5.3', recoveryWorker: {
     provider: 'doubao', model: 'deepseek-v4-1-flash', reasoningEffort: 'off', maxTokens: 32768,
   } }, explorer, { open: async () => ({ root: '/fixture', execution: [] }), bind() {}, close: async () => {},
     proposal: async () => ({ changes: [] }) });
@@ -227,12 +227,14 @@ test('terminal output exhaustion returns a compact root handoff without the repe
 
 test('single HTML prompt excludes executable checks and designer-invented acceptance criteria', () => {
   const prompt = workerPromptInput({ objective: 'Create SVG page',
-    productDesign: { plan: { goal: 'SVG page', scope: ['One HTML'], userFlows: ['Open it'],
-      implementation: ['Draw a scene'], risks: ['Small visual risk'], acceptanceCriteria: ['Invented fixed pivot'] } },
+    productDesign: { plan: { goal: 'SVG page', scope: 'One HTML', userFlows: 'Open it',
+      implementation: 'Draw a scene', risks: 'Small visual risk', acceptanceCriteria: 'Invented fixed pivot' } },
     taskIR: { constraints: ['Inline SVG'], acceptanceCriteria: ['It opens'], availableChecks: [{ argv: ['node', '-e', 'private checker source'] }] } },
   { requiredOutputs: ['page.html'], checks: [{ id: 'single-html', argv: ['node', '-e', 'private checker source'] }] }, '/workspace', true);
   assert.equal(prompt.target, 'page.html');
   assert.deepEqual(prompt.constraints, ['Inline SVG']);
+  assert.equal(prompt.designGuidance.scope, 'One HTML');
+  assert.equal(prompt.designGuidance.implementation, 'Draw a scene');
   assert.doesNotMatch(JSON.stringify(prompt), /private checker source|Invented fixed pivot|availableChecks/);
 });
 
@@ -252,8 +254,15 @@ test('real tool entry selects single HTML contract and synchronizes a fixture wo
   await ctx.plugin(Object.assign(inner => { scope = createScope(inner, agent); }, { inject: ['tools', 'systemPrompt'] }));
   const html = '<!doctype html><html><head></head><body><svg></svg></body></html>';
   let workers = 0;
-  await apply({ tools: scope.ctx.tools, llm: validatingLlm, on: scope.ctx.on.bind(scope.ctx), commands: { register() {} },
+  await apply({ get: name => name === 'attachments' ? { async saveImage() { return { attachmentId: 'fixture-image', mediaType: 'image/png', width: 1280, height: 800, bytes: 100 }; } } : undefined, tools: scope.ctx.tools, llm: validatingLlm, on: scope.ctx.on.bind(scope.ctx), commands: { register() {} },
     subagents: { async start(_provider, input) {
+      if (input.label === 'task_web_visual') {
+        assert.equal(input.agentOptions.model, 'kimi-k2-8-preview');
+        assert.equal(input.prompt.filter(p => p.type === 'image').length, 4);
+        assert.deepEqual(input.toolFilter.allow, []);
+        return { id: 'visual-fixture', result: Promise.resolve({ stopReason: 'completed', structured: {
+          status: 'passed', summary: 'Fixture visual review', evidence: ['Two actual browser images provided'], limitations: ['Fixture model verdict'] } }), async dispose() {} };
+      }
       workers++;
       await new Promise(resolve => setTimeout(resolve, 1100));
       assert.ok(progressEvents.some(e => e.type === 'todo/write' && e.data.todos.some(t => t.content.includes('实现中'))), 'progress must reach root while worker is still running');
@@ -263,7 +272,7 @@ test('real tool entry selects single HTML contract and synchronizes a fixture wo
       await writeFile(resolve(payload.workspace, payload.target), html);
       return { id: 'html-worker', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Fixture HTML' } }), async dispose() {} };
     } },
-  }, { stateDir: resolve(base, 'state'), contractPath,
+  }, { webVisual: { provider: 'doubao', model: 'kimi-k2-8-preview', executable: '/Users/chowchow/.cache/pinhaomo-web/chrome-headless-shell-mac-arm64/chrome-headless-shell' }, stateDir: resolve(base, 'state'), contractPath,
     runtimePackageJson: '/Applications/DSH Desktop.app/Contents/Resources/app/package.json' });
   const call = args => ctx.tools.execute({ agent, name: 'delivery_start', arguments: args,
     callId: 'html-start', signal: new AbortController().signal });
@@ -275,7 +284,7 @@ test('real tool entry selects single HTML contract and synchronizes a fixture wo
   const result = await call({ objective: 'Create one HTML', singleHtmlPath: 'pelican-bicycle.html' });
   assert.notEqual(result.isError, true, JSON.stringify(result));
   const run = JSON.parse(result.content[0].text);
-  assert.equal(run.state, 'passed', run.reason);
+  assert.equal(run.state, 'passed', JSON.stringify({ reason: run.reason, quality: run.quality, webVisual: run.webVisual }));
   assert.equal(workers, 1);
   assert.equal(run.syncReceipt.verified, true);
   assert.ok(progressEvents.at(-1).data.todos.every(t => t.status === 'completed'));
@@ -297,7 +306,7 @@ test('single HTML worker hands off on a successful write without another model c
   assert.equal(result.changes.length,1);
 });
 
-test('real HTML entry enforces MiniMax design then Kimi K2.8 implementation and preserves optional review', async t => {
+test('real HTML entry enforces MiniMax design, GLM implementation and a successful Kimi check', async t => {
   const base = await mkdtemp(resolve(tmpdir(), 'delivery-animation-dsh-'));
   const workspace = resolve(base, 'project'); await mkdir(workspace);
   const contractPath = resolve(base, 'contract.json');
@@ -308,10 +317,18 @@ test('real HTML entry enforces MiniMax design then Kimi K2.8 implementation and 
   const calls = [];
   const agent = { session: { id: 'animation-session', header: { cwd: workspace }, append() {} } };
   await ctx.plugin(Object.assign(inner => { scope = createScope(inner, agent); }, { inject: ['tools', 'systemPrompt'] }));
-  await apply({ tools: scope.ctx.tools, llm: validatingLlm, on: scope.ctx.on.bind(scope.ctx), commands: { register() {} },
+  await apply({ get: name => name === 'attachments' ? { async saveImage() { return { attachmentId: 'fixture-image', mediaType: 'image/png', width: 1280, height: 800, bytes: 100 }; } } : undefined, tools: scope.ctx.tools, llm: validatingLlm, on: scope.ctx.on.bind(scope.ctx), commands: { register() {} },
     subagents: { async start(_provider, input) {
+      if (input.label === 'task_web_visual') {
+        assert.equal(input.agentOptions.model, 'kimi-k2-8-preview');
+        assert.equal(input.prompt.filter(p => p.type === 'image').length, 4);
+        assert.deepEqual(input.toolFilter.allow, []);
+        return { id: 'visual-fixture', result: Promise.resolve({ stopReason: 'completed', structured: {
+          status: 'passed', summary: 'Fixture visual review', evidence: ['Two actual browser images provided'], limitations: ['Fixture model verdict'] } }), async dispose() {} };
+      }
       calls.push(input.label);
-      if (input.label === 'task_kimi_quality') throw Object.assign(new Error('Fixture upstream timeout'), { code: 'WORKER_EXECUTION_TIMEOUT' });
+      if (input.label === 'task_kimi_quality') return { id: 'quality-fixture', result: Promise.resolve({ stopReason: 'completed', structured: {
+        status: 'passed', summary: 'Fixture independent review', evidence: ['Fixture file and checks reviewed'], limitations: ['Fixture model verdict'] } }), async dispose() {} };
       if (input.label === 'task_minimax_design') {
         assert.equal(input.agentOptions.model, 'minimax-m3');
         assert.ok(!input.toolFilter.allow.includes('write'));
@@ -322,7 +339,7 @@ test('real HTML entry enforces MiniMax design then Kimi K2.8 implementation and 
         } }), async dispose() {} };
       }
       assert.equal(input.label, 'Delivery implement');
-      assert.equal(input.agentOptions.model, 'kimi-k2-8-preview');
+      assert.equal(input.agentOptions.model, 'glm-5.3');
       assert.equal(Object.hasOwn(input.agentOptions, 'reasoningEffort'), false);
       assert.match(input.persona, /每次模型调用的输出硬上限为 16384 token/);
       const payload = JSON.parse(input.prompt[0].text);
@@ -331,55 +348,30 @@ test('real HTML entry enforces MiniMax design then Kimi K2.8 implementation and 
       assert.equal(payload.designGuidance.goal, 'SVG animation');
       assert.doesNotMatch(JSON.stringify(payload), /Animation loops|single-html/);
       await writeFile(resolve(payload.workspace, payload.target), '<!doctype html><html><head></head><body><svg><circle cx="20" cy="20" r="10"/></svg></body></html>');
-      return { id: 'kimi-implementation', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Implemented the accepted storyboard.' } }), async dispose() {} };
+      return { id: 'glm-implementation', result: Promise.resolve({ stopReason: 'completed', structured: { summary: 'Implemented the accepted storyboard.' } }), async dispose() {} };
     } },
-  }, { stateDir: resolve(base, 'state'), contractPath, runtimePackageJson: '/Applications/DSH Desktop.app/Contents/Resources/app/package.json',
-    modelProvider: 'doubao', model: 'kimi-k2-8-preview', maxTokens: 16384,
-    qualityTool: 'task_kimi_quality', designTool: 'task_minimax_design', reviewPolicy: 'risk_based',
-    specialists: [{ toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2.7-code', readOnly: true, tools: ['read'], persona: 'Read-only code review.' }, { toolName: 'task_minimax_design', provider: 'doubao', model: 'minimax-m3', readOnly: true,
+  }, { webVisual: { provider: 'doubao', model: 'kimi-k2-8-preview', executable: '/Users/chowchow/.cache/pinhaomo-web/chrome-headless-shell-mac-arm64/chrome-headless-shell' }, stateDir: resolve(base, 'state'), contractPath, runtimePackageJson: '/Applications/DSH Desktop.app/Contents/Resources/app/package.json',
+    modelProvider: 'doubao', model: 'glm-5.3', maxTokens: 16384,
+    qualityTool: 'task_kimi_quality', designTool: 'task_minimax_design', reviewPolicy: 'required',
+    specialists: [{ toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2-8-preview', readOnly: true, tools: ['read'], persona: 'Read-only code review.' }, { toolName: 'task_minimax_design', provider: 'doubao', model: 'minimax-m3', readOnly: true,
       tools: ['read', 'glob', 'grep', 'snapshot_explore', 'skill'], persona: 'Create a product design.' }],
     sandbox: { nodeExecutable: '/Applications/DSH Desktop.app/Contents/Resources/app/node_modules/node/bin/node', backend: 'seatbelt' } });
   const result = await ctx.tools.execute({ agent, name: 'delivery_start', arguments: {
     objective: '制作一个循环 SVG 动画，明确动作节奏和分镜', singleHtmlPath: 'scene.html' }, callId: 'animation-start', signal: new AbortController().signal });
   assert.notEqual(result.isError, true, JSON.stringify(result));
   const run = JSON.parse(result.content[0].text);
-  assert.equal(run.state, 'passed', run.reason);
-  assert.deepEqual(calls, ['task_minimax_design', 'Delivery implement']);
-  assert.equal(run.capabilityTasks[0].capability, 'product_design');
+  assert.equal(run.state, 'blocked');
+  assert.deepEqual(calls, ['task_minimax_design', 'Delivery implement', 'task_kimi_quality'], JSON.stringify({ state: run.state, webVisual: run.webVisual }));
+  assert.ok(run.capabilityTasks.some(item => item.capability === 'product_design'));
   assert.equal(run.productDesign.plan.goal, 'SVG animation');
   assert.ok(run.acceptance.every(item => item.source !== 'product_design'));
-  assert.match(await readFile(resolve(workspace, 'scene.html'), 'utf8'), /<svg>/);
-
-  const unverifiedResult = await ctx.tools.execute({ agent, name: 'delivery_start', arguments: {
-    objective: '再制作一个 SVG 动画，不使用任何 skill，不进行任何验证', singleHtmlPath: 'unverified-scene.html' }, callId: 'animation-unverified', signal: new AbortController().signal });
-  assert.notEqual(unverifiedResult.isError, true, JSON.stringify(unverifiedResult));
-  const unverified = JSON.parse(unverifiedResult.content[0].text);
-  assert.equal(unverified.state, 'passed', unverified.reason);
-  assert.equal(unverified.assurance, 'unverified');
-  assert.equal(unverified.verifyCalls, 0);
-  assert.deepEqual(unverified.checks, []);
-  assert.equal(unverified.qualityGate, null);
-  assert.equal(unverified.syncReceipt.verified, false);
-  assert.equal(unverified.syncReceipt.assurance, 'unverified');
-  assert.deepEqual(calls, ['task_minimax_design', 'Delivery implement', 'task_minimax_design', 'Delivery implement']);
-  assert.match(await readFile(resolve(workspace, 'unverified-scene.html'), 'utf8'), /<svg>/);
-
-  assert.equal(run.verification.independentReview, 'not_requested');
-  assert.equal(run.verification.reviewPolicy, 'risk_based');
-  const reviewed = await ctx.tools.execute({ agent, name: 'delivery_review', arguments: { id: run.id },
-    callId: 'review-timeout', signal: new AbortController().signal });
-  assert.notEqual(reviewed.isError, true, JSON.stringify(reviewed));
-  const reviewResult = JSON.parse(reviewed.content[0].text);
-  assert.equal(reviewResult.state, 'passed');
-  assert.equal(reviewResult.review.status, 'incomplete');
-  assert.equal(reviewResult.review.reasonCode, 'REVIEW_TIMEOUT');
-  assert.deepEqual(reviewResult.syncReceipt, run.syncReceipt);
-  assert.match(await readFile(resolve(workspace, 'scene.html'), 'utf8'), /<svg>/);
+  assert.equal(run.quality.status, 'blocked');
+  assert.ok(run.capabilityTasks.some(item => item.capability === 'quality_review' && item.acceptance?.violations?.some(text => /successful check/.test(text))));
+  assert.equal(run.webVisual.status, 'passed');
+  assert.equal(run.verification.reviewPolicy, 'required');
+  await assert.rejects(readFile(resolve(workspace, 'scene.html')), /ENOENT/);
 
   // A blocked project must be rejected before another implementation is dispatched.
-  const blockerStore = new Store(resolve(base, 'state'));
-  blockerStore.create({ owner: agent.session.id, workspace: await realpath(workspace), objective: 'blocked fixture', contract: {}, files: {}, mode: 'project' });
-  blockerStore.close();
   const callCount = calls.length;
   const duplicate = await ctx.tools.execute({ agent, name: 'delivery_start', arguments: {
     objective: '再次制作循环 SVG 动画', singleHtmlPath: 'another-scene.html' }, callId: 'duplicate-animation-start', signal: new AbortController().signal });

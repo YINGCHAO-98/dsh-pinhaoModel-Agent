@@ -34,7 +34,9 @@ export const proposalSchema = {
 export function workerPromptInput(input, contract, workspace, singleHtml) {
   if (!singleHtml) return { ...input, contract, workspace };
   const { plan } = input.productDesign ?? {};
-  const guidance = entries => Array.isArray(entries) ? entries.slice(0, 6).map(value => String(value).slice(0, 400)) : [];
+  const guidance = value => Array.isArray(value)
+    ? value.slice(0, 6).map(entry => String(entry).slice(0, 400)).join('\n')
+    : typeof value === 'string' ? value.slice(0, 1200) : '';
   return {
     objective: input.objective,
     target: contract.requiredOutputs[0],
@@ -200,6 +202,7 @@ export function deliverySummary(run) {
     reasonCode: run.reasonCode ?? null, lastWorkerToolCalls: run.lastWorkerToolCalls ?? null,
     upstreamFailures: run.upstreamFailures ?? 0, upstreamCode: run.upstreamCode ?? null,
     snapshot: run.snapshot, artifact: run.artifact ?? null, reason: run.reason ?? null,
+    webVisual: (() => { const r = run.evidence.find(e => e.id === 'web-visual'); return r ? { ...compactQuality(r), screenshots: r.screenshots ?? [] } : null; })(),
     review: run.review ?? null, quality: compactQuality(run.quality), qualityGate: run.qualityGate ?? null,
     reportRefs: run.reportRefs ?? [], mode: run.mode ?? 'partial', assurance: run.assurance ?? 'verified', sourceDeliveries: run.sourceDeliveries ?? [],
     parentId: run.parentId ?? null, taskKey: run.taskKey ?? null, tasks: run.tasks ?? [],
@@ -250,6 +253,7 @@ export async function apply(ctx, config) {
   const resources = { tools: [...workerTools, 'html_chunk', 'snapshot_explore', 'request_capability'],
     models: [{ executor: 'coding-worker', provider: config.modelProvider, model: config.model },
       ...(config.recoveryWorker ? [{ executor: 'recovery-worker', provider: config.recoveryWorker.provider, model: config.recoveryWorker.model }] : []),
+      ...(config.webVisual ? [{ executor: 'web-visual-review', provider: config.webVisual.provider, model: config.webVisual.model, readOnly: true }] : []),
       ...(config.specialists ?? []).map(route => ({ executor: route.toolName, provider: route.provider, model: route.model, readOnly: route.readOnly }))],
     capabilities: [...Object.entries(capabilities).filter(([, value]) => config.specialists?.some(route => route.toolName === value.tool))
       .map(([id, value]) => ({ id, available: true, ...value })),
@@ -279,13 +283,14 @@ export async function apply(ctx, config) {
     designer: ({ route, run, ...input }) => specialists.run(route, { ...input, owner: run.owner,
       scope: `design:${run.id}:${run.designAttempts}`, objective: run.objective, request: productDesignRequest(run),
       context: JSON.stringify({ taskIR: run.taskIR, tasks: run.tasks, instruction: 'Return designPlan in structured_output. Use the original requirements as the authority. Make small tasks concise; explain high-risk changes. Do not add code, executable commands or broaden modification scope.' }) }),
+    webReviewer: input => specialists.reviewWeb(input),
     reviewer: input => specialists.run(input.route, input), qualityGate, reviewPolicy: config.reviewPolicy ?? 'on_request',
     askUser: request => {
       if (typeof ctx.userQuestions?.ask !== 'function') throw new Error('Trusted user interaction service unavailable');
       return ctx.userQuestions.ask(request);
     },
     deliveryInputs: (id, owner, refs) => specialists.control.deliveryInputs(id, owner, refs),
-    upstreamRoute: `${config.modelProvider ?? 'doubao'}:${config.model ?? 'kimi-k2-8-preview'}`,
+    upstreamRoute: `${config.modelProvider ?? 'doubao'}:${config.model ?? 'glm-5.3'}`,
     ownerAlive: owner => typeof ctx.sessions?.get !== 'function' || ctx.sessions.get(owner) !== undefined,
     runner, workerTimeoutMs: config.workerTimeoutMs ?? 600000 });
   const active = new Map();
@@ -482,11 +487,11 @@ export async function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'delivery_start',
-    description: 'Start an authorized delivery: MiniMax product design first, then Kimi K2.8 implementation, local checks, bounded repair and controlled synchronization. High-risk designs require independent Kimi K2.7 acceptance before synchronization. Do not separately request a duplicate product plan. For single HTML set singleHtmlPath to the exact root filename; the implementation model stays the same. Explicit user wording disabling validation selects the constrained unverified HTML path but does not skip product design. partial mode exports isolated results. Use for implementation or fixes, not discussion or status.',
+    description: 'Start an authorized delivery: MiniMax product design first, then GLM-5.3 implementation and repair, local checks, independent Kimi K2.8 quality and web screenshot review, and controlled synchronization before synchronization. Do not separately request a duplicate product plan. For single HTML set singleHtmlPath to the exact root filename; the implementation model stays the same. Explicit user wording disabling validation selects the constrained unverified HTML path but does not skip product design. partial mode exports isolated results. Use for implementation or fixes, not discussion or status.',
     parameters: { type: 'object', properties: { objective: { type: 'string', minLength: 1, maxLength: 16000 },
       projectRoot: { type: 'string', description: 'Project directory relative to session cwd, or dot for cwd. If omitted, uses session cwd exactly like native file tools; never guesses from src/tests or package files. Files, checks and synchronization share this directory.' },
       tasks: taskSchema, context: taskContextSchema,
-      singleHtmlPath: { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]*\\.html$', description: 'For single-file HTML tasks, exact root filename, e.g. pelican-bicycle.html. Only this file may change. Validation is mandatory unless the objective faithfully includes the user’s explicit request to skip it.' },
+      singleHtmlPath: { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]*\\.html$', description: 'For single-file HTML tasks, exact root filename, e.g. index.html. Only this file may change. Validation is mandatory unless the objective faithfully includes the user’s explicit request to skip it.' },
       mode: { type: 'string', enum: ['partial', 'project'] },
       sourceDeliveryIds: { type: 'array', maxItems: 20, items: { type: 'string' } },
       reportRefs: { type: 'array', maxItems: 20, items: { type: 'string' } } }, required: ['objective'], additionalProperties: false },

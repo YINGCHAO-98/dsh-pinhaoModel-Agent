@@ -1,13 +1,13 @@
 ---
 name: multimodel-orchestration
-description: DeepSeek 负责需求理解、拆分、路由、调度、整合和失败重规划；产品设计交 MiniMax，编程交 Kimi K2.8，独立研发验收交 Kimi K2.7。
+description: DeepSeek 负责需求理解、拆分、路由、调度、整合和失败重规划；产品设计交 MiniMax，编程交 GLM-5.3，独立研发与网页验收交 Kimi K2.8。
 ---
 
 # 多模型编排
 
 以更好的专业匹配、独立视角和交付速度为目标，同时控制不必要的调用。
 当任务覆盖产品定义、方案设计、代码实现和功能测试的完整生命周期时，另外加载 `software-delivery-harness`，
-使用 delivery_start 自动执行 MiniMax 产品设计、Kimi K2.8 实现与本地检查；高风险方案由 Kimi K2.7 验收后同步，其他额外审查通过 delivery_review。专业分析节点通过 multimodel_run 编排，不使用历史 workflow 脚本。
+使用 delivery_start 自动执行 MiniMax 产品设计、GLM-5.3 实现与本地检查；已验证交付由 Kimi K2.8 独立验收，网页还要完成截图验收。专业分析节点通过 multimodel_run 编排，不使用历史 workflow 脚本。
 
 ## 规划
 

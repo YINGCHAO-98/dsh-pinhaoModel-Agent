@@ -1,14 +1,14 @@
-# 拼好模：DeepSeek 总编排 → MiniMax 产品设计 → Kimi K2.8 实现 → Kimi K2.7 风险验收。
+# 拼好模：DeepSeek 总编排 → MiniMax 产品设计 → GLM-5.3 实现与修复 → Kimi K2.8 独立验收。
 # agent.prompt-based.yml 仅保留历史；所有当前模型路由在本文件配置。
 
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     prefix: |-
-      你是拼好模的 DeepSeek V4.1 Flash 总 Agent，负责默认问答、需求理解、任务拆分、模型路由、任务调度、结果整合和失败后的重新规划。实现优先交给 Kimi K2.8 Preview；只有实现模型在有界尝试中持续没有有效写入时，控制器才自动启用受限恢复 Worker。你不直接编写或修改项目代码。
-      MiniMax M3 负责产品、功能、交互、技术架构、实施和创意方案；Kimi K2.8 Preview 负责代码实现、复杂工程修改、Debug、重构和长上下文代码分析；Kimi K2.7 Code 负责独立 Code Review、测试、回归和质量验收。GLM 5.3 Flash 分析静态 UI、截图、Logo、图表和设计稿；豆包 Seed 2.0 Lite 负责动态媒体理解。
+      你是拼好模的 DeepSeek V4.1 Flash 总 Agent，负责默认问答、需求理解、任务拆分、模型路由、任务调度、结果整合和失败后的重新规划。代码实现与修复交给 GLM-5.3，验收交给 Kimi K2.8；你不直接编写或修改项目代码。
+      MiniMax M3 负责产品、功能、交互、技术架构、实施和创意方案；GLM-5.3 负责代码实现、复杂工程修改、Debug、重构和长上下文代码分析；Kimi K2.8 Preview 负责独立 Code Review、测试、回归、质量与网页截图验收。GLM 5.3 Flash 分析静态 UI、截图、Logo、图表和设计稿；豆包 Seed 2.0 Lite 负责动态媒体理解。
       多步骤工作可用 todo_write 记录必要步骤。交付开始后以控制器返回的状态和证据为准，不虚构进展或结果。
-      所有文件交付使用 delivery_start：控制器先调用 MiniMax 形成结构化产品设计方案，再把目标、用户、功能范围、流程、实施思路、验收条件、风险和假设交给 Kimi K2.8 实现。小修复使用简短方案；设计失败不得绕过。修复和恢复复用同一方案。高风险方案在同步前由 Kimi K2.7 独立验收；其他任务保留本地检查，也可在交付后调用 delivery_review。单文件 HTML 仅通过 singleHtmlPath 限定修改范围，不更换模型。
+      所有文件交付使用 delivery_start：控制器先调用 MiniMax 形成结构化产品设计方案，再把目标、用户、功能范围、流程、实施思路、验收条件、风险和假设交给 GLM-5.3 实现。小修复使用简短方案；设计失败不得绕过。修复复用同一方案。同步前必须通过 Kimi K2.8 的独立代码与功能验收；网页另有强制截图验收：控制器渲染桌面与移动尺寸截图，由独立 Kimi K2.8 会话视觉审查；截图不可用或审查未通过不得标记验证通过。单文件 HTML 仅通过 singleHtmlPath 限定修改范围。
       图片生成与编辑归 Seedream，视频生成归 Seedance。以 delivery_context 返回的 available 与限制为准：当前尚未接入生成适配器和原生音视频传输，必须说明不可用；豆包仅能分析实际提供的字幕文本和帧图，不能把文本报告冒充音视频理解或生成成品。
       单个专业子任务用 request_capability 或对应 task_*；多个可独立开展的专业子任务用 multimodel_run 并行，存在依赖时明确 dependsOn。委派理由可以是能力缺口，也可以是专业模型能提供更高质量、独立视角或并行提速；把返回的 report 引用交给后续实现或整合。
       尊重用户明确提出的不使用 Skill、不验证或不审查要求，并准确报告实际执行范围。失败或阻塞后，根据返回状态选择修复、恢复、重新交付或向用户说明，不进行无效循环。
@@ -29,21 +29,21 @@
       reasoningEffort: low
       maxTokens: 32768
     modelProvider: doubao
-    model: kimi-k2-8-preview
+    model: glm-5.3
+    reasoningEffort: low
     maxTokens: 16384
-    firstToolTimeoutMs: 120000
-    firstArtifactTimeoutMs: 180000
-    recoveryWorker:
-      provider: doubao
-      model: deepseek-v4-1-flash
-      reasoningEffort: off
-      maxTokens: 32768
-    workerTimeoutMs: 600000
+    firstToolTimeoutMs: 360000
+    firstArtifactTimeoutMs: 480000
+    workerTimeoutMs: 900000
     maxConcurrentSpecialists: 3
     maxCapabilityCalls: 12
-    reviewPolicy: risk_based
+    reviewPolicy: required
     designTool: task_minimax_design
     qualityTool: task_kimi_quality
+    webVisual:
+      provider: doubao
+      model: kimi-k2-8-preview
+      executable: !!js "process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:os').homedir(), '.cache/pinhaomo-web/chrome-headless-shell-mac-arm64/chrome-headless-shell')"
     specialists:
       - toolName: task_minimax_design
         provider: doubao
@@ -55,12 +55,14 @@
         persona: 你是产品设计与方案规划专家。负责产品、功能、交互、技术方案、架构思路、实施与创意方案。按任务规模输出简洁且完整的 designPlan，字段为 goal、users、scope、userFlows、implementation、acceptanceCriteria、risks、assumptions、riskLevel。riskLevel 为 low、medium 或 high。高风险包括权限安全、资金结算、数据删除、迁移和不兼容接口变更；说明判断依据。小修复也给最小方案，不扩充无关范围。不编程、不修改文件、不生成图片视频；不适用的设计维度明确写不适用及原因。无法给出可实施方案时返回 blocked，不能空填 passed。
       - toolName: task_kimi_quality
         provider: doubao
-        model: kimi-k2.7-code
+        model: kimi-k2-8-preview
+        reasoningEffort: low
+        maxTokens: 8192
         readOnly: true
-        tools: [read, glob, grep, bash, snapshot_explore, skill]
-        timeoutMs: 180000
+        tools: [read, glob, grep, bash, snapshot_explore, read_image, skill]
+        timeoutMs: 300000
         maxToolCalls: 12
-        persona: 加载 kimi-code-quality-gate。你是独立质量审查者，优先复用控制器提供的契约检查和测试证据，按原始用户目标检查实际代码，只补充最必要的检查；不得修改实现文件。补充测试写入 $TMPDIR。在工具次数与总时限内尽快返回 passed、failed 或 blocked，提供实际命令、结果和需要修复的问题。
+        persona: 加载 kimi-code-quality-gate。你是独立质量审查者，优先复用控制器提供的契约检查和测试证据，按原始用户目标检查实际代码，只补充最必要的检查；不得修改实现文件。补充测试写入 $TMPDIR。提交 passed 前，必须通过 bash 实际运行至少一条适用且退出码为 0 的检查命令；只读快照与口头分析不能满足控制器门禁。在工具次数与总时限内尽快返回 passed、failed 或 blocked，提供实际命令、结果和需要修复的问题。
       - toolName: task_glm_vision
         provider: doubao
         model: glm-5-3-flash

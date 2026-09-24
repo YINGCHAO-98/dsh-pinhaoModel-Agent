@@ -212,7 +212,7 @@ export class CapabilityControl {
       const violations = [];
       if (capability === 'visual_analysis' && images.some(path => !records.some(r => r.tool === 'read_image' && r.path === path && r.ok)))
         violations.push('Required images were not delivered through read_image');
-      if (capability === 'quality_review' && !records.some(r => r.tool === 'bash' && r.ok
+      if (capability === 'quality_review' && report.status === 'passed' && !records.some(r => r.tool === 'bash' && r.ok
         && r.commands?.some(c => c.exitCode === 0 && !c.timedOut))) violations.push('Reviewer did not execute a successful check');
       if (capability === 'media_analysis' && !upstream.length
         && !records.some(r => ['read', 'snapshot_explore', 'read_image'].includes(r.tool) && r.ok)) violations.push('No source material was read');

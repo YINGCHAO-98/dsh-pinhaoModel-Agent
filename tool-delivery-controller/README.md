@@ -1,12 +1,22 @@
+# 网页截图验收（2026-09-23）
+
+网页交付在本地检查通过后，必须从当前不可变快照渲染 1280×800、390×844 两种尺寸截图，再由 `webVisual` 指定的独立 Kimi K2.8 会话验收。Kimi K2.8 同时承担独立代码、功能和网页视觉验收；GLM-5.3 负责实现与修复。截图缺失、模型不可用、资源加载失败或脚本异常不能通过；状态机在同步和最终通过两处校验同一快照的截图证据，修改后重新验收。`delivery_status.webVisual` 包含模型、判定、限制与持久图片附件引用。
+
+浏览器为官方 Chrome Headless Shell 151.0.7922.34，安装于 `~/.cache/pinhaomo-web/`。整个浏览器进程树运行在 macOS Seatbelt 下，禁用网络、限制文件读写；CDP 使用匿名管道，不开放调试端口。Chromium 内部沙箱不能嵌套 Seatbelt，因此使用外层 OS 沙箱隔离；不得移除外层沙箱单独运行此适配器。执行器只向浏览器提供快照中的静态资源。
+
+当前范围为 1–8 个静态/已构建 HTML 入口；仅有 JSX/TSX/Vue/Svelte 源码而无构建页面会阻塞，需要先生成可渲染产物。远程 CDN、后端/API 与依赖外网的资源被拒绝。截图仅覆盖首屏两个尺寸，不能证明点击、跳转、支付、动画时序或无障碍交互正确；这些仍需专门交互测试。用户明确要求不验证时，既有受限 `unverified` 交付仍会如实标记为未经验证。
+
+验证：`node --test tests/web-browser.integration.mjs`（需要允许启动自己的 Seatbelt 沙箱）；真实 DSH 与模型对照脚本 `validation/web-visual-live.mjs`。模型读图仍可能误判，硬门禁保证证据存在和版本一致，不保证语义判断绝对正确。
+
 # 产品设计、实现与独立验收（当前默认）
 
-当前 preset 配置 `designTool: task_minimax_design`、`reviewPolicy: risk_based`。流程为 DeepSeek 需求编排 → MiniMax 产品设计 → Kimi K2.8 优先实现 → 本地检查 → 高风险任务 Kimi K2.7 独立验收 → 同步与复核。连续无有效写入并耗尽有界恢复时，控制器可调用一次配置的 DeepSeek 恢复 Worker。低/中风险不自动加入独立模型验收。没有配置本地检查时 `automatedChecks=not_configured`，不得宣称运行了测试。
+当前 preset 配置 `designTool: task_minimax_design`、`reviewPolicy: required`。流程为 DeepSeek 需求编排 → MiniMax 产品设计 → GLM-5.3 实现与修复 → 本地检查 → Kimi K2.8 独立代码及网页验收 → 同步与复核。实现无有效写入且耗尽有界尝试时明确失败，不切换其他模型写代码。没有配置本地检查时 `automatedChecks=not_configured`，不得宣称运行了测试。
 
 单 HTML 实现支持 `html_chunk(action=append,index,content)` 分批写入隔离草稿，每块 1..8192 UTF-8 字节，最多 128 块、512 KiB；序号必须连续。`html_chunk(action=finish,index=下一块序号)` 成功回执后才接管草稿，运行原有检查和同步。根 Agent 与其他专家不能调用；模型在首块之前耗尽输出预算时仍按 `WORKER_MAX_TOKENS` 失败，未完成草稿不作为交付物。
 
 产品设计是控制器的 design/designing 阶段，输出包含目标、用户、范围、用户流程、实施方案、验收标准、风险和假设。方案通过结构、模型身份和输入快照校验后持久化；Store 拒绝跳过设计直接实现。一般设计失败阻塞，显式恢复最多重试一次；DSH 报 `UNSUPPORTED_SCHEMA` 时直接失败，避免重复同一配置错误。取消、重启保留状态与预算。子任务继承父方案，修复不重复规划；实现与验收都收到同一方案。报告完整性失败会阻断实现。方案文本不成为 Shell 命令、修改权限或强制验收项；仅用户任务合同及部署合同中的验收项进入状态清单。风险等级为模型判断，程序只保证 high 必须经过验收，不保证模型能识别所有风险。
 
-所有模型角色由本 preset 固定：根请求钩子只路由 DeepSeek 总 Agent；Kimi K2.8 是首选实现模型，DeepSeek 恢复 Worker 仅在前者无有效写入并耗尽有界尝试后运行一次；MiniMax/GLM/豆包均只读，只有 Kimi K2.7 验收者可在只读工作区运行检查。Seedream 图片生成、Seedance 视频生成、豆包原生音视频输入在能力查询中显式 unavailable，不能通过其他模型伪装完成。
+所有模型角色由本 preset 固定：根请求钩子只路由 DeepSeek 总 Agent；GLM-5.3 是唯一实现与修复模型；MiniMax、GLM-5.3 Flash、豆包和 Kimi K2.8 验收者均只读，只有 Kimi K2.8 验收者可在只读工作区运行检查。Seedream 图片生成、Seedance 视频生成、豆包原生音视频输入在能力查询中显式 unavailable，不能通过其他模型伪装完成。
 
 `delivery_review({id})` 仅接受当前会话已经完成的交付，审查已交付的不可变快照，并提供本次变更路径。审查报告独立持久化于事件表，不修改交付状态或文件，不触发实现与修复。`verification.independentReview` 初始为 `not_requested`；超时、取消、不可用或无效报告为 `incomplete`，原因由 `review.reasonCode` 给出。完整报告可通过 `artifactRef` 追溯。项目后来有变更时 `projectMatchesReceipt=false`，旧快照审查不代表当前项目。
 
@@ -60,7 +70,7 @@ Worker 的 `max-tokens` 属于本次生成失败。仅当隔离工作副本未�
 
 ## 受控按需协助（当前实现）
 
-根助手负责专业分工和结果整合。文件交付统一先产品设计，再进入实现；小任务的方案保持简短。高风险使用 risk_based 验收门禁，额外交付后审查通过 delivery_review 发起。
+根助手负责专业分工和结果整合。文件交付统一先产品设计，再进入实现；小任务的方案保持简短。当前 verified 交付统一使用 required 验收门禁，额外交付后审查通过 delivery_review 发起。
 
 - `request_capability` 提交能力、目标、理由、专业协作相对单模型执行的价值、输入引用、预期产物与验收条件。这个价值可以是能力缺口、更好的领域匹配、独立视角或并行提速。能力定义与工具描述来自 `capabilities.mjs`，实际模型由 YAML 映射。
 - 原 `task_*` 为同一受控入口的兼容名称，参数除隐含 capability 外完全相同；不能绕过合同或预算。DAG 节点也必须提交理由和交付约定，不再接受只有 objective 的旧参数。
@@ -108,7 +118,7 @@ Worker 的 `max-tokens` 属于本次生成失败。仅当隔离工作副本未�
 4. 默认 `../delivery-contract.json` 使用通用工作区合同（`layout: workspace`）：不要求 `src/`、`tests/`、包配置或任何固定测试命令。`editablePaths: ["**"]` 允许工作区内普通文件；路径边界、隐藏/二进制文件限制、任务范围和冲突保护仍生效。实现器按实际项目执行适用检查，未运行的检查不得声称通过。维护者仍可配置专项合同的保护路径、必要输入和固定检查；这些明确配置不会被自动删除。
 5. 当前 Worker 原生工具适配器支持 macOS Seatbelt，配置中的 `runtimePackageJson` 指向本机 DSH 安装包，`sandbox.nodeExecutable` 指向其 Node。Docker 验证 Runner 保留，但 Docker Worker 工具运行时尚未接入，非 macOS 任务会 blocked；不回退到宿主直接执行。沙箱不可用或外层禁止嵌套时同样 blocked。
 
-单 HTML 创建或修改可使用 `delivery_start({objective: "原始目标与约束", singleHtmlPath: "pelican-bicycle.html"})`。控制器先设计方案，再在内置 HTML 合同下实现，只允许修改目标文件，禁止额外文件、删除交付物、路径穿越和多任务/产物导入。默认检查 HTML 结构与脚本并同步复核；结构检查不证明图形正确或动画流畅。简单修改仍走同一 Kimi K2.8 实现入口。
+单 HTML 创建或修改可使用 `delivery_start({objective: "原始目标与约束", singleHtmlPath: "index.html"})`。控制器先设计方案，再在内置 HTML 合同下实现，只允许修改目标文件，禁止额外文件、删除交付物、路径穿越和多任务/产物导入。默认检查 HTML 结构与脚本并同步复核；结构检查不证明图形正确或动画流畅。简单修改仍走同一 GLM-5.3 实现入口。
 
 用户明确“不使用 Skill”时，根与子模型的 skill 工具在该轮禁用。明确“不验证/不检查/不测试”时，独立 project 单 HTML 可启用 assurance=unverified：保留产品设计、隔离实现、路径边界、冲突保护与快照一致性同步，跳过检查、独立验收和自动修复；结果明确记录 verified=false。
 

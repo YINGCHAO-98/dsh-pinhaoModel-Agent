@@ -7,7 +7,7 @@ import { Specialists, validateReport } from '../specialists.mjs';
 import { capabilities, CapabilityControl } from '../capabilities.mjs';
 import { materialize } from '../files.mjs';
 import { SnapshotExplorer } from '../explore.mjs';
-const routes = ['minimax-m3', 'kimi-k2.7-code', 'glm-5-3-flash', 'doubao-seed-2-0-lite-260215']
+const routes = ['minimax-m3', 'kimi-k2-8-preview', 'glm-5-3-flash', 'doubao-seed-2-0-lite-260215']
   .map((model, i) => ({ toolName: ['task_minimax_design', 'task_kimi_quality', 'task_glm_vision', 'task_doubao_media'][i], provider: 'doubao', model, persona: 'test', description: 'test', readOnly: true,
     tools: i === 1 ? ['read', 'bash'] : i === 2 || i === 3 ? ['read', 'read_image'] : ['read', 'glob', 'grep'] }));
 const report = { status: 'passed', summary: 'complete content', evidence: ['checked input'], limitations: [], designPlan: {
@@ -97,10 +97,12 @@ test('product designer may inspect source only when the snapshot contains files'
 test('per-route timeout and tool-call budget are passed to the isolated specialist workspace', async t => {
   const f = await fixture(t);
   const route = { ...routes[1], readOnly: true, tools: ['read', 'bash'], timeoutMs: 120000, maxToolCalls: 12 };
-  await f.specialists.execute(route, { parent: exec().agent, signal: exec().signal, objective: 'Review', files: {} });
+  await f.specialists.execute(route, { parent: exec().agent, signal: exec().signal,
+    objective: 'Review', files: {}, deliveryDirectory: '/source/project' });
   const input = JSON.parse(f.requests[0].prompt[0].text);
   assert.equal(input.environment.timeoutMs, 120000);
   assert.equal(input.environment.toolCallLimit, 12);
+  assert.equal(Object.hasOwn(input, 'deliveryDirectory'), false);
   assert.deepEqual(f.requests[0].toolFilter.allow, ['read', 'bash']);
 });
 

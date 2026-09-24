@@ -1,3 +1,4 @@
+import { needsWebReview } from './web-visual.mjs';
 import { compactQuality } from './request-policy.mjs';
 import { htmlStructureRegression } from './html-contract.mjs';
 import { realpath, mkdir, rename, rm } from 'node:fs/promises';
@@ -11,12 +12,13 @@ import { obtainDecision } from './decisions.mjs';
 const CHILD_DISPATCH = Symbol('controller-owned-child');
 
 export class DeliveryController {
-  constructor({ store, worker, runner, reviewer, designer, designGate = null, readDesign, deliveryInputs, askUser, ownerAlive = () => true, qualityGate = null, reviewPolicy = 'required', upstreamRoute = 'worker', workerTimeoutMs = 600000, recoveryWorkerAvailable = false }) {
+  constructor({ store, worker, runner, reviewer, webReviewer = null, designer, designGate = null, readDesign, deliveryInputs, askUser, ownerAlive = () => true, qualityGate = null, reviewPolicy = 'required', upstreamRoute = 'worker', workerTimeoutMs = 600000, recoveryWorkerAvailable = false }) {
     this.store = store;
     this.upstreamRoute = upstreamRoute;
     this.askUser = askUser;
     this.worker = worker;
     this.reviewer = reviewer;
+    this.webReviewer = webReviewer;
     if (!['required', 'on_request', 'risk_based'].includes(reviewPolicy)) throw new Error('Invalid reviewPolicy');
     this.designer = designer; this.designGate = designGate; this.readDesign = readDesign;
     this.qualityGate = qualityGate;
@@ -454,6 +456,18 @@ export class DeliveryController {
             this.store.event(run.id, 'check.finished', result);
             evidence.push(result);
           }
+          if (needsWebReview(files) && evidence.every(e => e.kind === 'passed' && e.exitCode === 0)) {
+            let visual;
+            try {
+              if (!this.webReviewer) throw new Error('WEB_VISUAL_REVIEW_UNAVAILABLE');
+              visual = await this.webReviewer({ parent, files, snapshot: run.snapshot, objective: run.objective, signal });
+              if (visual.snapshot !== run.snapshot || !['passed', 'failed', 'blocked'].includes(visual.status)
+                || (visual.status === 'passed' && !visual.screenshots?.length)) throw new Error('WEB_VISUAL_EVIDENCE_INVALID');
+            } catch (error) { visual = { snapshot: run.snapshot, status: 'blocked', summary: error.message }; }
+            const result = { ...visual, id: 'web-visual', kind: visual.status, exitCode: visual.status === 'passed' ? 0 : 1 };
+            evidence.push(result);
+            this.store.event(run.id, 'check.finished', result);
+          }
           signal.throwIfAborted();
           if (evidence.some(e => e.kind === 'blocked' || e.kind === 'cancelled')) {
             this.store.move(run, 'blocked', { evidence, resumeState: 'verify', reason: 'Verification environment unavailable, timed out or interrupted' });
@@ -552,6 +566,7 @@ export class DeliveryController {
             continue;
           }
           await this.assertSources(run);
+          if (needsWebReview(actual)) evidence.push(run.evidence.find(e => e.id === 'web-visual'));
           this.store.move(run, 'passed', { evidence, quality: run.quality, syncReceipt: { snapshot: run.snapshot, verified: true, at: new Date().toISOString(), paths: run.syncPlan.map(c => c.path) } });
           return run;
         } else throw new Error(`Unexpected active state: ${run.state}`);

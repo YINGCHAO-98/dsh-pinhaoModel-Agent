@@ -82,7 +82,7 @@ export function assertDesignReceipt(run, receipt = run.productDesign) {
 export function productDesignRequest(run) {
   return { capability: 'product_design', objective: run.objective,
     reason: 'Required product design before implementation',
-    singleModelGap: 'MiniMax defines product behavior and a bounded implementation plan; Kimi implements it.',
+    singleModelGap: 'MiniMax defines product behavior and a bounded implementation plan; GLM-5.3 implements it.',
     inputRefs: run.reportRefs ?? [], expectedOutput: 'Return designPlan with goal, users, scope, userFlows, implementation, acceptanceCriteria, risks, assumptions as plain text strings; use newline-separated points within each section, not arrays or nested objects. riskLevel is low, medium or high. Return evidence and limitations as plain text strings. Scale detail to the task; small fixes need only a concise plan. Preserve user constraints. Identify high-risk security, data-loss and compatibility changes.',
     acceptanceCriteria: ['Cover the original goal and constraints', 'Define observable behavior and acceptance criteria', 'Explain risk level and assumptions', 'Do not modify files or invent executable checks'] };
 }

@@ -9,7 +9,7 @@ import { validateProductDesign, normalizeProductDesignReport, designReceipt } fr
 import { deliveryTodos } from '../progress.mjs';
 
 const designGate = { toolName: 'task_minimax_design', provider: 'doubao', model: 'minimax-m3', readOnly: true };
-const qualityGate = { toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2.7-code', readOnly: true };
+const qualityGate = { toolName: 'task_kimi_quality', provider: 'doubao', model: 'kimi-k2-8-preview', readOnly: true };
 const plan = { goal: 'Fix the user-facing value', users: ['Existing user'], scope: ['value.txt only'],
   userFlows: ['Read the corrected value'], implementation: ['Change the value without changing its public format'],
   acceptanceCriteria: ['value.txt contains good'], risks: ['Small local change'], assumptions: ['Preserve public format'], riskLevel: 'low' };
@@ -115,7 +115,7 @@ test('high-risk product design requires independent Kimi review before project s
   const f = await fixture(t, { designer: async ({ run }) => report = reportFor(run, 'high'), readDesign: async () => report });
   const result = await f.controller.drive(f.run.id, 'root');
   assert.equal(result.state, 'passed', result.reason);
-  assert.equal(result.qualityGate.model, 'kimi-k2.7-code');
+  assert.equal(result.qualityGate.model, 'kimi-k2-8-preview');
   assert.ok(f.calls.indexOf('review') > f.calls.indexOf('implement'));
   assert.equal(result.quality.status, 'passed');
 });

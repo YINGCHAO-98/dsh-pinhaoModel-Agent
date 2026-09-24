@@ -1,0 +1,24 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { captureWeb } from '../web-visual.mjs';
+import { homedir } from 'node:os';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+const executable = homedir() + '/.cache/pinhaomo-web/chrome-headless-shell-mac-arm64/chrome-headless-shell';
+const b64 = s => Buffer.from(s).toString('base64');
+test('real isolated browser renders both viewports and records runtime and external-resource failures', { timeout: 120000 }, async () => {
+  const html = await readFile(new URL('../validation/pelican-single-html-20260923/pelican-bicycle.html', import.meta.url), 'utf8');
+  const result = await captureWeb({ 'index.html': b64(html) }, { executable });
+  assert.equal(result.screenshots.length, 2);
+  assert.equal(result.motion.length, 2);
+  assert.ok(result.motion.every(frame => frame.runningAnimations > 0 && frame.framesDiffer));
+  assert.deepEqual(result.failures, []);
+  const output = new URL('../validation/web-browser-20260923/', import.meta.url);
+  await mkdir(output, { recursive: true });
+  for (const shot of result.screenshots) await writeFile(new URL(`${shot.viewport.width}.png`, output), Buffer.from(shot.data, 'base64'));
+  const failures = await captureWeb({ 'index.html': b64('<html><body><img src="https://example.com/private.png"><img src="file:///etc/passwd"><script>throw new Error("fixture-runtime-error")</script></body></html>') }, { executable });
+  assert.ok(failures.failures.some(s => s.includes('WEB_EXTERNAL_REQUEST_BLOCKED')));
+  assert.ok(failures.failures.some(s => s.includes('Uncaught')));
+  const smil = await captureWeb({ 'index.html': b64('<!doctype html><html><body><svg viewBox="0 0 100 100" width="100%" height="100%"><rect x="0" y="20" width="30" height="30" fill="red"><animate attributeName="x" values="0;60;0" dur="1s" repeatCount="indefinite"/></rect></svg></body></html>') }, { executable });
+  assert.ok(smil.motion.every(frame => frame.smilAnimations > 0 && frame.framesDiffer));
+  await writeFile(new URL('results.json', output), JSON.stringify({ screenshots: result.screenshots.map(({ data, ...r }) => r), failures: failures.failures }, null, 2));
+});
