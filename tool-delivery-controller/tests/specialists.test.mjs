@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Specialists, validateReport } from '../specialists.mjs';
 import { capabilities, CapabilityControl } from '../capabilities.mjs';
-import { materialize } from '../files.mjs';
+import { materialize, digest } from '../files.mjs';
 import { SnapshotExplorer } from '../explore.mjs';
 const routes = ['minimax-m3', 'kimi-k2-8-preview', 'glm-5-3-flash', 'doubao-seed-2-0-lite-260215']
   .map((model, i) => ({ toolName: ['task_minimax_design', 'task_kimi_quality', 'task_glm_vision', 'task_doubao_media'][i], provider: 'doubao', model, persona: 'test', description: 'test', readOnly: true,
@@ -48,7 +48,7 @@ async function fixture(t, response = async () => report, recordTools = true) {
   const ctx = { tools: { register: definition => definitions.set(definition.name, definition) },
     subagents: { async start(provider, request) {
       assert.equal(provider, 'spawn'); requests.push(request);
-      const workspace = [...sessions].find(s => s.root === JSON.parse(request.prompt[0].text).workspace);
+      const workspace = [...sessions].find(s => s.root === JSON.parse(request.prompt.at(-1).text).workspace);
       if (recordTools) workspace.execution.push({ tool: 'read', ok: true }, { tool: 'read_image', path: 'logo.png', ok: true },
         { tool: 'bash', ok: true, commands: [{ command: 'node --test', exitCode: 0 }] });
       return { id: `child-${requests.length}`, result: response(request).then(structured => ({ stopReason: 'completed',
@@ -184,6 +184,47 @@ test('visual role allowlist removes shell without changing other roles', async t
   assert.deepEqual(f.requests[0].toolFilter.allow, ['read', 'read_image', 'skill']);
   await f.specialists.run(routes[1], { parent: exec().agent, signal: exec().signal, objective: 'Review', files: {} });
   assert.ok(f.requests[1].toolFilter.allow.includes('bash'));
+});
+
+test('browser evidence is delivered to Kimi, GLM and Doubao; a failed specialist blocks the visual gate', async t => {
+  const f = await fixture(t, async request => ({ ...report,
+    status: request.label === 'task_glm_vision' ? 'failed' : 'passed',
+    summary: `${request.label} inspected attached images` }));
+  f.specialists.config.webVisual = { provider: 'doubao', model: 'kimi-k2-8-preview',
+    visionTool: 'task_glm_vision', mediaTool: 'task_doubao_media', executable: '/bin/browser' };
+  let saved = 0;
+  f.ctx.get = name => name === 'attachments' ? { async saveImage(input) {
+    return { attachmentId: `image-${++saved}`, mediaType: input.mediaType, bytes: input.data.length };
+  } } : undefined;
+  const frame = index => ({ entry: 'index.html', viewport: { width: 1280, height: 800 },
+    data: Buffer.from(`frame ${index}`).toString('base64'), sha256: `hash-${index}`,
+    frameIndex: index, elapsedMs: index * 300 });
+  f.specialists.webCapture = async () => ({ screenshots: [frame(0)], motion: [frame(1)],
+    sequence: [frame(0), frame(1), frame(2), frame(3)], failures: [] });
+  const files = { 'index.html': Buffer.from('<html>scene</html>').toString('base64') };
+  const result = await f.specialists.reviewWeb({ files, snapshot: digest(files), parent: exec().agent,
+    objective: 'Animated pelican page', signal: exec().signal });
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(result.reviewers.map(r => r.tool), ['task_web_visual', 'task_glm_vision', 'task_doubao_media']);
+  const delivered = Object.fromEntries(f.requests.map(r => [r.agentOptions.model,
+    r.prompt.filter(item => item.type === 'image').length]));
+  assert.deepEqual(delivered, { 'kimi-k2-8-preview': 2, 'glm-5-3-flash': 2,
+    'doubao-seed-2-0-lite-260215': 4 });
+  assert.equal(result.sequence.length, 4);
+  assert.ok(result.sequence.every(frame => frame.attachment?.attachmentId));
+});
+
+test('browser review refuses incomplete motion frames before dispatching models', async t => {
+  const f = await fixture(t);
+  f.specialists.config.webVisual = { provider: 'doubao', model: 'kimi-k2-8-preview',
+    visionTool: 'task_glm_vision', mediaTool: 'task_doubao_media', executable: '/bin/browser' };
+  f.ctx.get = name => name === 'attachments' ? { async saveImage() { return { attachmentId: 'image' }; } } : undefined;
+  const frame = { entry: 'index.html', viewport: { width: 1280, height: 800 }, data: Buffer.from('frame').toString('base64'), sha256: 'hash', frameIndex: 0 };
+  f.specialists.webCapture = async () => ({ screenshots: [frame], motion: [], sequence: [frame], failures: [] });
+  const files = { 'index.html': Buffer.from('<html>scene</html>').toString('base64') };
+  await assert.rejects(f.specialists.reviewWeb({ files, snapshot: digest(files), parent: exec().agent,
+    objective: 'Animated page', signal: exec().signal }), /WEB_MOTION_SEQUENCE_REQUIRED/);
+  assert.equal(f.requests.length, 0);
 });
 
 test('missing gap, unavailable capability and traversal are rejected before any model dispatch', async t => {

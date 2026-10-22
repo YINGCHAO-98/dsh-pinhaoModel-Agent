@@ -66,6 +66,14 @@ export function validateRoleRoutes(config) {
   if (config.webVisual && (config.webVisual.model !== 'kimi-k2-8-preview' || typeof config.webVisual.provider !== 'string' || !config.webVisual.provider
     || typeof config.webVisual.executable !== 'string' || !config.webVisual.executable.startsWith('/')))
     throw new Error('Invalid web visual route or browser executable');
+  if (config.webVisual?.visionTool !== undefined && (config.webVisual.visionTool !== 'task_glm_vision'
+    || !config.specialists?.some(route => route.toolName === config.webVisual.visionTool
+      && route.model === 'glm-5-3-flash' && route.readOnly === true)))
+    throw new Error('Invalid web vision specialist route');
+  if (config.webVisual?.mediaTool !== undefined && (config.webVisual.mediaTool !== 'task_doubao_media'
+    || !config.specialists?.some(route => route.toolName === config.webVisual.mediaTool
+      && route.model === 'doubao-seed-2-0-lite-260215' && route.readOnly === true)))
+    throw new Error('Invalid web media specialist route');
   configuredRecoveryWorkerAgentOptions(config);
   if (!config.enforceRoleModels) return;
   if (config.recoveryWorker) throw new Error('Implementation recovery must remain with GLM-5.3');
@@ -74,7 +82,9 @@ export function validateRoleRoutes(config) {
     task_glm_vision: 'glm-5-3-flash', task_doubao_media: 'doubao-seed-2-0-lite-260215' };
   if (config.orchestrator?.model !== 'deepseek-v4-1-flash' || config.designTool !== 'task_minimax_design'
     || config.qualityTool !== 'task_kimi_quality' || config.reviewPolicy !== 'required'
-    || config.webVisual?.model !== 'kimi-k2-8-preview') throw new Error('Invalid orchestrator/design/review role assignment');
+    || config.webVisual?.model !== 'kimi-k2-8-preview'
+    || config.webVisual?.visionTool !== 'task_glm_vision'
+    || config.webVisual?.mediaTool !== 'task_doubao_media') throw new Error('Invalid orchestrator/design/review role assignment');
   for (const route of config.specialists ?? []) {
     if (roles[route.toolName] !== route.model || route.readOnly !== true
       || route.tools?.some(tool => ['write', 'edit'].includes(tool))

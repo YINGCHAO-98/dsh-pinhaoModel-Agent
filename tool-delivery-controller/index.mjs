@@ -202,7 +202,7 @@ export function deliverySummary(run) {
     reasonCode: run.reasonCode ?? null, lastWorkerToolCalls: run.lastWorkerToolCalls ?? null,
     upstreamFailures: run.upstreamFailures ?? 0, upstreamCode: run.upstreamCode ?? null,
     snapshot: run.snapshot, artifact: run.artifact ?? null, reason: run.reason ?? null,
-    webVisual: (() => { const r = run.evidence.find(e => e.id === 'web-visual'); return r ? { ...compactQuality(r), screenshots: r.screenshots ?? [] } : null; })(),
+    webVisual: (() => { const r = run.evidence.find(e => e.id === 'web-visual'); return r ? { ...compactQuality(r), screenshots: r.screenshots ?? [], sequence: r.sequence ?? [], reviewers: r.reviewers ?? [] } : null; })(),
     review: run.review ?? null, quality: compactQuality(run.quality), qualityGate: run.qualityGate ?? null,
     reportRefs: run.reportRefs ?? [], mode: run.mode ?? 'partial', assurance: run.assurance ?? 'verified', sourceDeliveries: run.sourceDeliveries ?? [],
     parentId: run.parentId ?? null, taskKey: run.taskKey ?? null, tasks: run.tasks ?? [],

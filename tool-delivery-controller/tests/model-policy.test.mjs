@@ -23,7 +23,7 @@ test('model policy rejects malformed and adapter-incompatible delivery parameter
 
 test('model role policy rejects swapped experts, writable specialists and shell access for planners', () => {
   const config = { enforceRoleModels: true, orchestrator: { model: 'deepseek-v4-1-flash' },
-    designTool: 'task_minimax_design', qualityTool: 'task_kimi_quality', reviewPolicy: 'required', webVisual: { provider: 'doubao', model: 'kimi-k2-8-preview', executable: '/bin/chrome-headless-shell' }, specialists: [
+    designTool: 'task_minimax_design', qualityTool: 'task_kimi_quality', reviewPolicy: 'required', webVisual: { provider: 'doubao', model: 'kimi-k2-8-preview', visionTool: 'task_glm_vision', mediaTool: 'task_doubao_media', executable: '/bin/chrome-headless-shell' }, specialists: [
       { toolName: 'task_minimax_design', model: 'minimax-m3', readOnly: true, tools: ['read'] },
       { toolName: 'task_kimi_quality', model: 'kimi-k2-8-preview', readOnly: true, tools: ['read', 'bash'] },
       { toolName: 'task_glm_vision', model: 'glm-5-3-flash', readOnly: true, tools: ['read_image'] },
@@ -36,6 +36,12 @@ test('model role policy rejects swapped experts, writable specialists and shell 
   }
   const changed = structuredClone(config); changed.specialists[1].model = 'kimi-k2.7-code';
   assert.throws(() => validateRoleRoutes(changed), /Invalid specialist/);
+  for (const tool of ['visionTool', 'mediaTool']) {
+    const missing = structuredClone(config); delete missing.webVisual[tool];
+    assert.throws(() => validateRoleRoutes(missing), /Invalid orchestrator\/design\/review role assignment/);
+    const wrong = structuredClone(config); wrong.webVisual[tool] = 'task_kimi_quality';
+    assert.throws(() => validateRoleRoutes(wrong), /Invalid web/);
+  }
 });
 
 test('root request is routed to DeepSeek while GLM implementation and Kimi review requests stay unchanged', async () => {

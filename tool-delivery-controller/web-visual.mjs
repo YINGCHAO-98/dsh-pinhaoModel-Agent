@@ -33,7 +33,7 @@ export async function captureWeb(files, { signal, executable } = {}) {
   const scratch = await realpath(await mkdtemp('/private/tmp/ph-web-'));
   let child, pending = new Map(), next = 0, buffer = '', sessionId, abort;
   const stop = () => { if (child?.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} } };
-  const failures = [], screenshots = [], motion = [];
+  const failures = [], screenshots = [], motion = [], sequence = [];
   try {
     const profile = seatbeltProfile(scratch, scratch, executable, { extraReadRoots: ['/Library/Fonts', '/Library/Preferences'] });
     child = spawn('/usr/bin/sandbox-exec', ['-p', profile, executable, '--no-sandbox', '--headless=new', '--disable-gpu', '--no-first-run',
@@ -82,19 +82,32 @@ export async function captureWeb(files, { signal, executable } = {}) {
       await send('Runtime.evaluate', { expression: 'new Promise(r => { const done = () => document.fonts.ready.then(() => setTimeout(r, 300)); if(document.readyState === "complete") done(); else addEventListener("load",done,{once:true}); })', awaitPromise: true });
       const { data } = await send('Page.captureScreenshot', { format: 'png' });
       if (!data || Buffer.from(data, 'base64').subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('WEB_SCREENSHOT_INVALID');
+      const firstAt = Date.now();
       const firstHash = hash(Buffer.from(data, 'base64'));
       screenshots.push({ entry, viewport, data, sha256: firstHash });
+      if (viewport.width === 1280) sequence.push({ entry, viewport, data, sha256: firstHash, frameIndex: 0, elapsedMs: 0 });
       const animationState = await send('Runtime.evaluate', { expression: '({runningAnimations:document.getAnimations().filter(a => a.playState === "running").length,smilAnimations:document.querySelectorAll("animate,animateTransform,animateMotion,set").length})', returnByValue: true });
       if (animationState.exceptionDetails) throw new Error('WEB_ANIMATION_INSPECTION_FAILED');
       await send('Runtime.evaluate', { expression: 'new Promise(r => setTimeout(r, 380))', awaitPromise: true });
       const later = (await send('Page.captureScreenshot', { format: 'png' })).data;
       if (!later || Buffer.from(later, 'base64').subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('WEB_SCREENSHOT_INVALID');
+      const laterElapsedMs = Date.now() - firstAt;
       const laterHash = hash(Buffer.from(later, 'base64'));
       motion.push({ entry, viewport, data: later, sha256: laterHash, ...animationState.result.value,
-        framesDiffer: firstHash !== laterHash, intervalMs: 380 });
+        framesDiffer: firstHash !== laterHash, intervalMs: laterElapsedMs });
+      if (viewport.width === 1280) {
+        sequence.push({ entry, viewport, data: later, sha256: laterHash, frameIndex: 1, elapsedMs: laterElapsedMs });
+        for (let frameIndex = 2; frameIndex < 4; frameIndex++) {
+          await send('Runtime.evaluate', { expression: 'new Promise(r => setTimeout(r, 300))', awaitPromise: true });
+          const next = (await send('Page.captureScreenshot', { format: 'png' })).data;
+          if (!next || Buffer.from(next, 'base64').subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('WEB_SCREENSHOT_INVALID');
+          sequence.push({ entry, viewport, data: next, sha256: hash(Buffer.from(next, 'base64')),
+            frameIndex, elapsedMs: Date.now() - firstAt });
+        }
+      }
     }
     signal.removeEventListener('abort', abort);
-    return { screenshots, motion, failures: [...new Set(failures)] };
+    return { screenshots, motion, sequence, failures: [...new Set(failures)] };
   } finally {
     if (abort) signal.removeEventListener('abort', abort);
     if (child && child.exitCode === null && child.signalCode === null) { const exited = new Promise(r => child.once('exit', r)); stop(); await exited; }

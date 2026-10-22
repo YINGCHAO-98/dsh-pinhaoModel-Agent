@@ -10,6 +10,9 @@ test('real isolated browser renders both viewports and records runtime and exter
   const result = await captureWeb({ 'index.html': b64(html) }, { executable });
   assert.equal(result.screenshots.length, 2);
   assert.equal(result.motion.length, 2);
+  assert.deepEqual(result.sequence.map(frame => frame.frameIndex), [0, 1, 2, 3]);
+  assert.equal(result.sequence[0].elapsedMs, 0);
+  assert.ok(result.sequence.every((frame, index) => index === 0 || frame.elapsedMs > result.sequence[index - 1].elapsedMs));
   assert.ok(result.motion.every(frame => frame.runningAnimations > 0 && frame.framesDiffer));
   assert.deepEqual(result.failures, []);
   const output = new URL('../validation/web-browser-20260923/', import.meta.url);
